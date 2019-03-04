@@ -1,0 +1,1 @@
+Invoke-Command -Computer WKS1 -ScriptBlock { Disable-WindowsOptionalFeature -Online -FeatureName 'MicrosoftWindowsPowerShellV2' -norestart }

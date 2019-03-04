@@ -27,7 +27,7 @@ param(
 
 function Invoke-Recon {
 
-<#
+    <#
 .NAME
 TR3PS - Incident Response.
 
@@ -129,305 +129,307 @@ This tool pulls data from a target Windows 7 or later systems where there is sus
       -Windows Version Information
 #>
 
-#=======================================================================================
-# Prepare to Capture Live Host Data
-#=======================================================================================
+    #=======================================================================================
+    # Prepare to Capture Live Host Data
+    #=======================================================================================
 
-# Mask errors
-$ErrorActionPreference= 'silentlycontinue'
+    # Mask errors
+    $ErrorActionPreference = 'silentlycontinue'
 
-# Check for Admin Rights
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
-    Write-Host 'You must run TR3PS from an elevated PowerShell session...'
-    Exit 1
-}
-
-# Enable Logging
-New-EventLog -LogName Application -Source "TR3PS"
-Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1337 -Message "Forensic Data Acquisition Initiated"
-
-# Define the Drive
-$TR3PSDir = $(get-location).path
-Set-Location -Path $TR3PSDir -PassThru > $null 2>&1
-
-# Create directories
-function dirs {
-    mkdir TR3PS\ > $null 2>&1
-    mkdir TR3PS\config\ > $null 2>&1
-    mkdir TR3PS\network\ > $null 2>&1
-    mkdir TR3PS\process\ > $null 2>&1
-    mkdir TR3PS\system\ > $null 2>&1
-    mkdir TR3PS\web\ > $null 2>&1
-    mkdir TR3PS\registry\ > $null 2>&1
-}
-$exists = "TR3PS_*\"
-If (Test-Path $exists){
-    Remove-Item TR3PS_*\ -Recurse -Force
-    dirs
-}Else{
-    dirs
-}
-
-#=======================================================================================
-# Evidence Collection
-#=======================================================================================
-
-# Get user and admin info
-$whoami = $env:username
-qwinsta > TR3PS\config\activeUsers.html
-$activeUsersA = type TR3PS\config\activeUsers.html
-$activeUsers = $activeUsersA | foreach {$_ + "<br />"}
-
-# Set environmental variables
-$ip = ((ipconfig | findstr [0-9].\.)[0]).Split()[-1]
-$computerName = (gi env:\Computername).Value
-$userDirectory = (gi env:\userprofile).value
-$user = (gi env:\USERNAME).value
-$date = Get-Date -format D
-$dateString = Get-Date -format MM-dd-yyyy
-$dateTime = Get-Date -Format MM/dd/yyyy-H:mm:ss
-if (-Not ($companyName)) {
-    $companyName = "Proprietary / Confidential � Not For Disclosure"
-} Else {
-    $companyCheck = "^[a-zA-Z0-9\s+]+$"
-    if (-not ($companyName -match $companyCheck)) {
-        Write-Host 'Hey now...'
-        Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34405 -Message "Possible Attack Detected via companyName parameter: $companyName"
+    # Check for Admin Rights
+    if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
+        Write-Host 'You must run TR3PS from an elevated PowerShell session...'
         Exit 1
     }
-    $companyName = "Proprietary / Confidential to $companyName � Not For Disclosure"
-}
 
-# Display banner and host data
-$banner
-Write-Host ""
-Write-Host "$dateTime : Capturing Host Data : $computerName - $ip"
+    # Enable Logging
+    New-EventLog -LogName Application -Source "TR3PS"
+    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1337 -Message "Forensic Data Acquisition Initiated"
 
-# Get IP Address Details
-ipconfig -all | ConvertTo-Html -Fragment > TR3PS\config\ipconfig.html
-$ipconfig = type TR3PS\config\ipconfig.html
+    # Define the Drive
+    $TR3PSDir = $(get-location).path
+    Set-Location -Path $TR3PSDir -PassThru > $null 2>&1
 
-# Gathering Scheduled Processes
-at > TR3PS\process\at-jobs.html
-$atA = get-content TR3PS\process\at-jobs.html
-$at = $atA | foreach {$_ + "<br />"}
-
-# Gathering list of Scheduled Tasks
-$schtasks = Get-ScheduledTask | where state -EQ 'ready' | Get-ScheduledTaskInfo | Sort TaskPath |Select TaskName, TaskPath | ConvertTo-Html -Fragment
-
-# Extract Installed Hotfix
-$hotfix = get-hotfix | Where-Object {$_.Description -ne ''} | select Description,HotFixID,InstalledBy | ConvertTo-Html -Fragment
-
-# Gathering Process Information
-$taskDetail = tasklist /V /FO CSV | ConvertFrom-Csv | ConvertTo-Html -Fragment
-
-# Gather Windows Service Data
-Get-WmiObject win32_service | Select-Object Name, DisplayName, PathName, StartName, StartMode, State, TotalSessions, Description > TR3PS\process\service-detail.html
-$serviceDetailA = get-content TR3PS\process\service-detail.html
-$serviceDetail = $serviceDetailA | foreach {$_ + "<br />"}
-
-# DNS Cache
-$dnsCache = Get-DnsClientCache -Status 'Success' | Select Name, Data | ConvertTo-Html -Fragment
-
-# Netstat information
-$netstat = netstat -ant | select -skip 4 | ConvertFrom-String -PropertyNames none, proto,ipsrc,ipdst,state,state2,none,none | select ipsrc,ipdst,state | ConvertTo-Html -Fragment
-
-# Display Listening Processes
-$listeningProcesses = netstat -ano | findstr -i listening | ForEach-Object { $_ -split "\s+|\t+" } | findstr /r "^[1-9+]*$" | sort | unique | ForEach-Object { Get-Process -Id $_ } | Select ProcessName,Path,Company,Description | ConvertTo-Html -Fragment > TR3PS\network\net-processes.html
-
-# ARP table
-$arp = arp -a | select -skip 3 | ConvertFrom-String -PropertyNames none,IP,MAC,Type | Select IP,MAC,Type | ConvertTo-Html -Fragment
-
-# Gathering information about running services
-$netServices = Get-Service | where-object {$_.Status -eq "Running"} | Select Name, DisplayName | ConvertTo-Html -fragment
-
-#Gathering information about open shares
-net user > TR3PS\system\netuser.html
-net use > TR3PS\network\shares.html
-$netUserA = get-content TR3PS\system\netuser.html
-$netUser = $netUserA | foreach {$_ + "<br />"}
-$sharesA = get-content TR3PS\network\shares.html
-$shares = $sharesA | foreach {$_ + "<br />"}
-
-# Gathering host file information
-$hosts = Import-Csv $env:windir\system32\drivers\etc\hosts | ConvertTo-Html -Fragment
-$networks = Import-Csv $env:windir\system32\drivers\etc\networks | ConvertTo-Html -Fragment
-
-# Gather Currently Installed Software
-$software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* |  Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | ConvertTo-Html -Fragment > TR3PS\process\software.html
-
-# List Recently Used USB Devices
-$usb = Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR\*\* | Select FriendlyName | ConvertTo-Html -Fragment > TR3PS\system\usb.html
-
-# Gather command history
-$commandHist = Get-History | ConvertTo-Html -Fragment
-
-# Dumping the firewall information
-echo "Firewall State" > TR3PS\system\firewall-config.html
-netsh firewall show state >> TR3PS\system\firewall-config.html
-echo "Firewall Config" >> TR3PS\system\firewall-config.html
-netsh firewall show config >> TR3PS\system\firewall-config.html
-echo "Firewall Dump" >> TR3PS\system\firewall-config.html
-netsh dump >> TR3PS\system\firewall-config.html
-$firewallA = get-content TR3PS\system\firewall-config.html
-$firewall = $firewallA | foreach {$_ + "<br />"}
-$firewall > TR3PS\system\firewall-config.html
-
-# Saving the Environment
-$set = Get-ChildItem ENV: | Select Name, Value | ConvertTo-Html -Fragment
-
-# Return GPResult Output
-& $env:windir\system32\gpresult.exe /v > TR3PS\system\gpresult.html
-$gpresultA = get-content TR3PS\system\gpresult.html
-$gpresult = $gpresultA | foreach {$_ + "<br />"}
-
-# Get active SMB sessions
-Get-SmbSession > TR3PS\network\smbsessions.html
-$smbSessionA = get-content TR3PS\network\smbsessions.html
-$smbSession = $smbSessionS | foreach {$_ + "<br />"}
-
-# Get ACL's
-$acl = Get-Acl | Select AccessToString, Owner, Group, Sddl | ConvertTo-Html -Fragment
-
-# Gathering Windows version information
-$version = [Environment]::OSVersion | ConvertTo-Html -Fragment
-
-# Dumping the startup information
-type $env:SystemDrive\autoexec.bat > TR3PS\system\autoexecBat.html 2>&1
-type $env:SystemDrive\config.sys > TR3PS\system\configSys.html 2>&1
-type $env:windir\win.ini > TR3PS\system\winIni.html 2>&1
-type $env:windir\system.ini > TR3PS\system\systemIni.html 2>&1
-$autoexecA = get-content TR3PS\system\autoexecBat.html
-$autoexec = $autoexecA | foreach {$_ + "<br />"}
-$configSysA = get-content TR3PS\system\configSys.html
-$configSys = $ConfigSysA | foreach {$_ + "<br />"}
-$winIniA = get-content TR3PS\system\winIni.html
-$winIni = $winIniA | foreach {$_ + "<br />"}
-$systemIniA = get-content TR3PS\system\systemIni.html
-$systemIni = $systemIniA | foreach {$_ + "<br />"}
-
-$psversiontable > TR3PS\config\powershell-version.html
-$powershellVersionA = type TR3PS\config\powershell-version.html
-$powershellVersion = $powershellVersionA | foreach {$_ + "<br />"}
-
-# Startup Drivers
-# Thanks Mark Vankempen!
-$startupDrivers = reg query hklm\system\currentcontrolset\services /s | Select-String -pattern "^\s*?ImagePath.*?\.sys$"
-$shadyDrivers = $startupDrivers | Select-String -pattern "^\s*?ImagePath.*?(user|temp).*?\\.*?\.(sys|exe)$"
-$startupDrivers = $startupDrivers | ConvertTo-Html -Fragment
-$shadyDrivers = $shadyDrivers | ConvertTo-Html -Fragment
-$startupDrivers > TR3PS\registry\startup-drivers.html
-
-# Registry: Run
-$hklmRun = Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run | ConvertTo-Html -as List -Fragment
-$hkcuRun = Get-ItemProperty HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run | ConvertTo-Html -as List -Fragment
-
-# Antivirus
-$antiVirus = Get-WmiObject -Namespace root\SecurityCenter2 -Class AntiVirusProduct | ConvertTo-Html -as List -Fragment
-
-# list downloaded files
-$downloads = dir C:\Users\*\Downloads\* -Recurse | Select Name, CreationTime, LastAccessTime, Attributes | ConvertTo-Html -Fragment > TR3PS\web\downloads.html
-
-# Extract Prefetch File Listing
-# script stolen from:
-#     https://github.com/davehull/Kansa/blob/master/Modules/Process/Get-PrefetchListing.ps1
-$pfconf = (Get-ItemProperty "hklm:\system\currentcontrolset\control\session manager\memory management\prefetchparameters").EnablePrefetcher
-Switch -Regex ($pfconf) {
-    "[1-3]" {
-        $o = "" | Select-Object FullName, CreationTimeUtc, LastAccessTimeUtc, LastWriteTimeUtc
-        ls $env:windir\Prefetch\*.pf | % {
-            $o.FullName = $_.FullName;
-            $o.CreationTimeUtc = Get-Date($_.CreationTimeUtc) -format o;
-            $o.LastAccesstimeUtc = Get-Date($_.LastAccessTimeUtc) -format o;
-            $o.LastWriteTimeUtc = Get-Date($_.LastWriteTimeUtc) -format o;
-            $o
-        } | ConvertTo-Html -Fragment >> TR3PS\process\prefetch.html
+    # Create directories
+    function dirs {
+        mkdir TR3PS\ > $null 2>&1
+        mkdir TR3PS\config\ > $null 2>&1
+        mkdir TR3PS\network\ > $null 2>&1
+        mkdir TR3PS\process\ > $null 2>&1
+        mkdir TR3PS\system\ > $null 2>&1
+        mkdir TR3PS\web\ > $null 2>&1
+        mkdir TR3PS\registry\ > $null 2>&1
     }
-    default {
-        echo "" >> TR3PS\process\prefetch.html
-        echo "Prefetch not enabled on ${env:COMPUTERNAME}" >> TR3PS\process\prefetch.html
-        echo "" >> TR3PS\process\prefetch.html
+    $exists = "TR3PS_*\"
+    If (Test-Path $exists) {
+        Remove-Item TR3PS_*\ -Recurse -Force
+        dirs
     }
-}
-$prefetch = type TR3PS\process\prefetch.html
+    Else {
+        dirs
+    }
 
-# Extract Internet Explorer History
-# script stolen from:
-#      https://richardspowershellblog.wordpress.com/2011/06/29/ie-history-to-csv/
-function get-iehistory {
-[CmdletBinding()]
-param ()
-$shell = New-Object -ComObject Shell.Application
-$hist = $shell.NameSpace(34)
-$folder = $hist.Self
-$hist.Items() |
-foreach {
- if ($_.IsFolder) {
-   $siteFolder = $_.GetFolder
-   $siteFolder.Items() |
-   foreach {
-     $site = $_
-     if ($site.IsFolder) {
-        $pageFolder  = $site.GetFolder
-        $pageFolder.Items() |
-        foreach {
-           $visit = New-Object -TypeName PSObject -Property @{
-               Site = $($site.Name)
-               URL = $($pageFolder.GetDetailsOf($_,0))
-               Date = $( $pageFolder.GetDetailsOf($_,2))
-           }
-           $visit
+    #=======================================================================================
+    # Evidence Collection
+    #=======================================================================================
+
+    # Get user and admin info
+    $whoami = $env:username
+    qwinsta > TR3PS\config\activeUsers.html
+    $activeUsersA = type TR3PS\config\activeUsers.html
+    $activeUsers = $activeUsersA | foreach {$_ + "<br />"}
+
+    # Set environmental variables
+    $ip = ((ipconfig | findstr [0-9].\.)[0]).Split()[-1]
+    $computerName = (gi env:\Computername).Value
+    $userDirectory = (gi env:\userprofile).value
+    $user = (gi env:\USERNAME).value
+    $date = Get-Date -format D
+    $dateString = Get-Date -format MM-dd-yyyy
+    $dateTime = Get-Date -Format MM/dd/yyyy-H:mm:ss
+    if (-Not ($companyName)) {
+        $companyName = "Proprietary / Confidential � Not For Disclosure"
+    }
+    Else {
+        $companyCheck = "^[a-zA-Z0-9\s+]+$"
+        if (-not ($companyName -match $companyCheck)) {
+            Write-Host 'Hey now...'
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34405 -Message "Possible Attack Detected via companyName parameter: $companyName"
+            Exit 1
         }
-     }
-   }
- }
-}
-}
-get-iehistory | select Date, URL | ConvertTo-Html -Fragment > TR3PS\web\ie-history.html
-$ieHistory = type TR3PS\web\ie-history.html
+        $companyName = "Proprietary / Confidential to $companyName � Not For Disclosure"
+    }
 
-# Take a screenshot of the current desktop
-# script stolen from:
-#      https://gallery.technet.microsoft.com/scriptcenter/eeff544a-f690-4f6b-a586-11eea6fc5eb8
-Function Take-ScreenShot {
-#Requires -Version 2
+    # Display banner and host data
+    $banner
+    Write-Host ""
+    Write-Host "$dateTime : Capturing Host Data : $computerName - $ip"
+
+    # Get IP Address Details
+    ipconfig -all | ConvertTo-Html -Fragment > TR3PS\config\ipconfig.html
+    $ipconfig = type TR3PS\config\ipconfig.html
+
+    # Gathering Scheduled Processes
+    at > TR3PS\process\at-jobs.html
+    $atA = get-content TR3PS\process\at-jobs.html
+    $at = $atA | foreach {$_ + "<br />"}
+
+    # Gathering list of Scheduled Tasks
+    $schtasks = Get-ScheduledTask | where state -EQ 'ready' | Get-ScheduledTaskInfo | Sort TaskPath |Select TaskName, TaskPath | ConvertTo-Html -Fragment
+
+    # Extract Installed Hotfix
+    $hotfix = get-hotfix | Where-Object {$_.Description -ne ''} | select Description, HotFixID, InstalledBy | ConvertTo-Html -Fragment
+
+    # Gathering Process Information
+    $taskDetail = tasklist /V /FO CSV | ConvertFrom-Csv | ConvertTo-Html -Fragment
+
+    # Gather Windows Service Data
+    Get-WmiObject win32_service | Select-Object Name, DisplayName, PathName, StartName, StartMode, State, TotalSessions, Description > TR3PS\process\service-detail.html
+    $serviceDetailA = get-content TR3PS\process\service-detail.html
+    $serviceDetail = $serviceDetailA | foreach {$_ + "<br />"}
+
+    # DNS Cache
+    $dnsCache = Get-DnsClientCache -Status 'Success' | Select Name, Data | ConvertTo-Html -Fragment
+
+    # Netstat information
+    $netstat = netstat -ant | select -skip 4 | ConvertFrom-String -PropertyNames none, proto, ipsrc, ipdst, state, state2, none, none | select ipsrc, ipdst, state | ConvertTo-Html -Fragment
+
+    # Display Listening Processes
+    $listeningProcesses = netstat -ano | findstr -i listening | ForEach-Object { $_ -split "\s+|\t+" } | findstr /r "^[1-9+]*$" | sort | unique | ForEach-Object { Get-Process -Id $_ } | Select ProcessName, Path, Company, Description | ConvertTo-Html -Fragment > TR3PS\network\net-processes.html
+
+    # ARP table
+    $arp = arp -a | select -skip 3 | ConvertFrom-String -PropertyNames none, IP, MAC, Type | Select IP, MAC, Type | ConvertTo-Html -Fragment
+
+    # Gathering information about running services
+    $netServices = Get-Service | where-object {$_.Status -eq "Running"} | Select Name, DisplayName | ConvertTo-Html -fragment
+
+    #Gathering information about open shares
+    net user > TR3PS\system\netuser.html
+    net use > TR3PS\network\shares.html
+    $netUserA = get-content TR3PS\system\netuser.html
+    $netUser = $netUserA | foreach {$_ + "<br />"}
+    $sharesA = get-content TR3PS\network\shares.html
+    $shares = $sharesA | foreach {$_ + "<br />"}
+
+    # Gathering host file information
+    $hosts = Import-Csv $env:windir\system32\drivers\etc\hosts | ConvertTo-Html -Fragment
+    $networks = Import-Csv $env:windir\system32\drivers\etc\networks | ConvertTo-Html -Fragment
+
+    # Gather Currently Installed Software
+    $software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* |  Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | ConvertTo-Html -Fragment > TR3PS\process\software.html
+
+    # List Recently Used USB Devices
+    $usb = Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR\*\* | Select FriendlyName | ConvertTo-Html -Fragment > TR3PS\system\usb.html
+
+    # Gather command history
+    $commandHist = Get-History | ConvertTo-Html -Fragment
+
+    # Dumping the firewall information
+    echo "Firewall State" > TR3PS\system\firewall-config.html
+    netsh firewall show state >> TR3PS\system\firewall-config.html
+    echo "Firewall Config" >> TR3PS\system\firewall-config.html
+    netsh firewall show config >> TR3PS\system\firewall-config.html
+    echo "Firewall Dump" >> TR3PS\system\firewall-config.html
+    netsh dump >> TR3PS\system\firewall-config.html
+    $firewallA = get-content TR3PS\system\firewall-config.html
+    $firewall = $firewallA | foreach {$_ + "<br />"}
+    $firewall > TR3PS\system\firewall-config.html
+
+    # Saving the Environment
+    $set = Get-ChildItem ENV: | Select Name, Value | ConvertTo-Html -Fragment
+
+    # Return GPResult Output
+    & $env:windir\system32\gpresult.exe /v > TR3PS\system\gpresult.html
+    $gpresultA = get-content TR3PS\system\gpresult.html
+    $gpresult = $gpresultA | foreach {$_ + "<br />"}
+
+    # Get active SMB sessions
+    Get-SmbSession > TR3PS\network\smbsessions.html
+    $smbSessionA = get-content TR3PS\network\smbsessions.html
+    $smbSession = $smbSessionS | foreach {$_ + "<br />"}
+
+    # Get ACL's
+    $acl = Get-Acl | Select AccessToString, Owner, Group, Sddl | ConvertTo-Html -Fragment
+
+    # Gathering Windows version information
+    $version = [Environment]::OSVersion | ConvertTo-Html -Fragment
+
+    # Dumping the startup information
+    type $env:SystemDrive\autoexec.bat > TR3PS\system\autoexecBat.html 2>&1
+    type $env:SystemDrive\config.sys > TR3PS\system\configSys.html 2>&1
+    type $env:windir\win.ini > TR3PS\system\winIni.html 2>&1
+    type $env:windir\system.ini > TR3PS\system\systemIni.html 2>&1
+    $autoexecA = get-content TR3PS\system\autoexecBat.html
+    $autoexec = $autoexecA | foreach {$_ + "<br />"}
+    $configSysA = get-content TR3PS\system\configSys.html
+    $configSys = $ConfigSysA | foreach {$_ + "<br />"}
+    $winIniA = get-content TR3PS\system\winIni.html
+    $winIni = $winIniA | foreach {$_ + "<br />"}
+    $systemIniA = get-content TR3PS\system\systemIni.html
+    $systemIni = $systemIniA | foreach {$_ + "<br />"}
+
+    $psversiontable > TR3PS\config\powershell-version.html
+    $powershellVersionA = type TR3PS\config\powershell-version.html
+    $powershellVersion = $powershellVersionA | foreach {$_ + "<br />"}
+
+    # Startup Drivers
+    # Thanks Mark Vankempen!
+    $startupDrivers = reg query hklm\system\currentcontrolset\services /s | Select-String -pattern "^\s*?ImagePath.*?\.sys$"
+    $shadyDrivers = $startupDrivers | Select-String -pattern "^\s*?ImagePath.*?(user|temp).*?\\.*?\.(sys|exe)$"
+    $startupDrivers = $startupDrivers | ConvertTo-Html -Fragment
+    $shadyDrivers = $shadyDrivers | ConvertTo-Html -Fragment
+    $startupDrivers > TR3PS\registry\startup-drivers.html
+
+    # Registry: Run
+    $hklmRun = Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run | ConvertTo-Html -as List -Fragment
+    $hkcuRun = Get-ItemProperty HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run | ConvertTo-Html -as List -Fragment
+
+    # Antivirus
+    $antiVirus = Get-WmiObject -Namespace root\SecurityCenter2 -Class AntiVirusProduct | ConvertTo-Html -as List -Fragment
+
+    # list downloaded files
+    $downloads = dir C:\Users\*\Downloads\* -Recurse | Select Name, CreationTime, LastAccessTime, Attributes | ConvertTo-Html -Fragment > TR3PS\web\downloads.html
+
+    # Extract Prefetch File Listing
+    # script stolen from:
+    #     https://github.com/davehull/Kansa/blob/master/Modules/Process/Get-PrefetchListing.ps1
+    $pfconf = (Get-ItemProperty "hklm:\system\currentcontrolset\control\session manager\memory management\prefetchparameters").EnablePrefetcher
+    Switch -Regex ($pfconf) {
+        "[1-3]" {
+            $o = "" | Select-Object FullName, CreationTimeUtc, LastAccessTimeUtc, LastWriteTimeUtc
+            ls $env:windir\Prefetch\*.pf | % {
+                $o.FullName = $_.FullName;
+                $o.CreationTimeUtc = Get-Date($_.CreationTimeUtc) -format o;
+                $o.LastAccesstimeUtc = Get-Date($_.LastAccessTimeUtc) -format o;
+                $o.LastWriteTimeUtc = Get-Date($_.LastWriteTimeUtc) -format o;
+                $o
+            } | ConvertTo-Html -Fragment >> TR3PS\process\prefetch.html
+        }
+        default {
+            echo "" >> TR3PS\process\prefetch.html
+            echo "Prefetch not enabled on ${env:COMPUTERNAME}" >> TR3PS\process\prefetch.html
+            echo "" >> TR3PS\process\prefetch.html
+        }
+    }
+    $prefetch = type TR3PS\process\prefetch.html
+
+    # Extract Internet Explorer History
+    # script stolen from:
+    #      https://richardspowershellblog.wordpress.com/2011/06/29/ie-history-to-csv/
+    function get-iehistory {
+        [CmdletBinding()]
+        param ()
+        $shell = New-Object -ComObject Shell.Application
+        $hist = $shell.NameSpace(34)
+        $folder = $hist.Self
+        $hist.Items() |
+            foreach {
+            if ($_.IsFolder) {
+                $siteFolder = $_.GetFolder
+                $siteFolder.Items() |
+                    foreach {
+                    $site = $_
+                    if ($site.IsFolder) {
+                        $pageFolder = $site.GetFolder
+                        $pageFolder.Items() |
+                            foreach {
+                            $visit = New-Object -TypeName PSObject -Property @{
+                                Site = $($site.Name)
+                                URL  = $($pageFolder.GetDetailsOf($_, 0))
+                                Date = $( $pageFolder.GetDetailsOf($_, 2))
+                            }
+                            $visit
+                        }
+                    }
+                }
+            }
+        }
+    }
+    get-iehistory | select Date, URL | ConvertTo-Html -Fragment > TR3PS\web\ie-history.html
+    $ieHistory = type TR3PS\web\ie-history.html
+
+    # Take a screenshot of the current desktop
+    # script stolen from:
+    #      https://gallery.technet.microsoft.com/scriptcenter/eeff544a-f690-4f6b-a586-11eea6fc5eb8
+    Function Take-ScreenShot {
+        #Requires -Version 2
         [cmdletbinding(
-                SupportsShouldProcess = $True,
-                DefaultParameterSetName = "screen",
-                ConfirmImpact = "low"
+            SupportsShouldProcess = $True,
+            DefaultParameterSetName = "screen",
+            ConfirmImpact = "low"
         )]
-Param (
-       [Parameter(
-            Mandatory = $False,
-            ParameterSetName = "screen",
-            ValueFromPipeline = $True)]
+        Param (
+            [Parameter(
+                Mandatory = $False,
+                ParameterSetName = "screen",
+                ValueFromPipeline = $True)]
             [switch]$screen,
-       [Parameter(
-            Mandatory = $False,
-            ParameterSetName = "window",
-            ValueFromPipeline = $False)]
+            [Parameter(
+                Mandatory = $False,
+                ParameterSetName = "window",
+                ValueFromPipeline = $False)]
             [switch]$activewindow,
-       [Parameter(
-            Mandatory = $False,
-            ParameterSetName = "",
-            ValueFromPipeline = $False)]
+            [Parameter(
+                Mandatory = $False,
+                ParameterSetName = "",
+                ValueFromPipeline = $False)]
             [string]$file,
-       [Parameter(
-            Mandatory = $False,
-            ParameterSetName = "",
-            ValueFromPipeline = $False)]
+            [Parameter(
+                Mandatory = $False,
+                ParameterSetName = "",
+                ValueFromPipeline = $False)]
             [string]
-            [ValidateSet("bmp","jpeg","png")]
+            [ValidateSet("bmp", "jpeg", "png")]
             $imagetype = "bmp",
-       [Parameter(
-            Mandatory = $False,
-            ParameterSetName = "",
-            ValueFromPipeline = $False)]
+            [Parameter(
+                Mandatory = $False,
+                ParameterSetName = "",
+                ValueFromPipeline = $False)]
             [switch]$print
 
-)
-# C# code
-$code = @'
+        )
+        # C# code
+        $code = @'
 using System;
 using System.Runtime.InteropServices;
 using System.Drawing;
@@ -561,531 +563,487 @@ namespace ScreenShotDemo
   }
 }
 '@
-#User Add-Type to import the code
-add-type $code -ReferencedAssemblies 'System.Windows.Forms','System.Drawing'
-#Create the object for the Function
-$capture = New-Object ScreenShotDemo.ScreenCapture
+        #User Add-Type to import the code
+        add-type $code -ReferencedAssemblies 'System.Windows.Forms', 'System.Drawing'
+        #Create the object for the Function
+        $capture = New-Object ScreenShotDemo.ScreenCapture
 
-#Take screenshot of the entire screen
-If ($Screen) {
-    Write-Verbose "Taking screenshot of entire desktop"
-    #Save to a file
-    If ($file) {
-        If ($file -eq "") {
-            $file = "$pwd\image.bmp"
+        #Take screenshot of the entire screen
+        If ($Screen) {
+            Write-Verbose "Taking screenshot of entire desktop"
+            #Save to a file
+            If ($file) {
+                If ($file -eq "") {
+                    $file = "$pwd\image.bmp"
+                }
+                Write-Verbose "Creating screen file: $file with imagetype of $imagetype"
+                $capture.CaptureScreenToFile($file, $imagetype)
             }
-        Write-Verbose "Creating screen file: $file with imagetype of $imagetype"
-        $capture.CaptureScreenToFile($file,$imagetype)
+            ElseIf ($print) {
+                $img = $Capture.CaptureScreen()
+                $pd = New-Object System.Drawing.Printing.PrintDocument
+                $pd.Add_PrintPage( {$_.Graphics.DrawImage(([System.Drawing.Image]$img), 0, 0)})
+                $pd.Print()
+            }
+            Else {
+                $capture.CaptureScreen()
+            }
         }
-    ElseIf ($print) {
-        $img = $Capture.CaptureScreen()
-        $pd = New-Object System.Drawing.Printing.PrintDocument
-        $pd.Add_PrintPage({$_.Graphics.DrawImage(([System.Drawing.Image]$img), 0, 0)})
-        $pd.Print()
-        }
+    }
+    Take-ScreenShot -screen -file "c:\screenshot.png" -imagetype png
+
+    # convert the image to Base64 for inclusion in the HTML report
+    $path = "c:\screenshot.png"
+    $screenshot = [convert]::ToBase64String((get-content $path -encoding byte))
+    move $path .\TR3PS\config\screenshot.png
+
+
+    # Capture Log and Registry Data using cmdlets from Get-ComputerDetails
+    # Awesome cmdlets stolen from:
+    #    https://raw.githubusercontent.com/clymb3r/PowerShell/master/Get-ComputerDetails/Get-ComputerDetails.ps1
+    if ( $remote -eq $true ) {
+
+        # I Suck at PowerShell, anyone know how to mitigate the memory issue so that Kansa cmdlets can run remotely?
+
+        $RDPconnections = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
+    Unless the shell memory is expanded...<br /><br />
+    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
+    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
+
+        $psscripts = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
+    Unless the shell memory is expanded...<br /><br />
+    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
+    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
+
+        $4624 = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
+    Unless the shell memory is expanded...<br /><br />
+    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
+    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
+
+        $4648 = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
+    Unless the shell memory is expanded...<br /><br />
+    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
+    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
+
+    }
     Else {
-        $capture.CaptureScreen()
+
+        function Find-4648Logons {
+            Param(
+                $SecurityLog
+            )
+
+            $ExplicitLogons = $SecurityLog | Where {$_.InstanceID -eq 4648}
+            $ReturnInfo = @{}
+
+            foreach ($ExplicitLogon in $ExplicitLogons) {
+                $Subject = $false
+                $AccountWhosCredsUsed = $false
+                $TargetServer = $false
+                $SourceAccountName = ""
+                $SourceAccountDomain = ""
+                $TargetAccountName = ""
+                $TargetAccountDomain = ""
+                $TargetServer = ""
+                foreach ($line in $ExplicitLogon.Message -split "\r\n") {
+                    if ($line -cmatch "^Subject:$") {
+                        $Subject = $true
+                    }
+                    elseif ($line -cmatch "^Account\sWhose\sCredentials\sWere\sUsed:$") {
+                        $Subject = $false
+                        $AccountWhosCredsUsed = $true
+                    }
+                    elseif ($line -cmatch "^Target\sServer:") {
+                        $AccountWhosCredsUsed = $false
+                        $TargetServer = $true
+                    }
+                    elseif ($Subject -eq $true) {
+                        if ($line -cmatch "\s+Account\sName:\s+(\S.*)") {
+                            $SourceAccountName = $Matches[1]
+                        }
+                        elseif ($line -cmatch "\s+Account\sDomain:\s+(\S.*)") {
+                            $SourceAccountDomain = $Matches[1]
+                        }
+                    }
+                    elseif ($AccountWhosCredsUsed -eq $true) {
+                        if ($line -cmatch "\s+Account\sName:\s+(\S.*)") {
+                            $TargetAccountName = $Matches[1]
+                        }
+                        elseif ($line -cmatch "\s+Account\sDomain:\s+(\S.*)") {
+                            $TargetAccountDomain = $Matches[1]
+                        }
+                    }
+                    elseif ($TargetServer -eq $true) {
+                        if ($line -cmatch "\s+Target\sServer\sName:\s+(\S.*)") {
+                            $TargetServer = $Matches[1]
+                        }
+                    }
+                }
+
+                #Filter out logins that don't matter
+                if (-not ($TargetAccountName -cmatch "^DWM-.*" -and $TargetAccountDomain -cmatch "^Window\sManager$")) {
+                    $Key = $SourceAccountName + $SourceAccountDomain + $TargetAccountName + $TargetAccountDomain + $TargetServer
+                    if (-not $ReturnInfo.ContainsKey($Key)) {
+                        $Properties = @{
+                            LogType           = 4648
+                            LogSource         = "Security"
+                            SourceAccountName = $SourceAccountName
+                            SourceDomainName  = $SourceAccountDomain
+                            TargetAccountName = $TargetAccountName
+                            TargetDomainName  = $TargetAccountDomain
+                            TargetServer      = $TargetServer
+                            Count             = 1
+                            Times             = @($ExplicitLogon.TimeGenerated)
+                        }
+
+                        $ResultObj = New-Object PSObject -Property $Properties
+                        $ReturnInfo.Add($Key, $ResultObj)
+                    }
+                    else {
+                        $ReturnInfo[$Key].Count++
+                        $ReturnInfo[$Key].Times += , $ExplicitLogon.TimeGenerated
+                    }
+                }
+            }
+
+            return $ReturnInfo
+        }
+        function Find-4624Logons {
+            Param (
+                $SecurityLog
+            )
+
+            $Logons = $SecurityLog | Where {$_.InstanceID -eq 4624}
+            $ReturnInfo = @{}
+
+            foreach ($Logon in $Logons) {
+                $SubjectSection = $false
+                $NewLogonSection = $false
+                $NetworkInformationSection = $false
+                $AccountName = ""
+                $AccountDomain = ""
+                $LogonType = ""
+                $NewLogonAccountName = ""
+                $NewLogonAccountDomain = ""
+                $WorkstationName = ""
+                $SourceNetworkAddress = ""
+                $SourcePort = ""
+
+                foreach ($line in $Logon.Message -Split "\r\n") {
+                    if ($line -cmatch "^Subject:$") {
+                        $SubjectSection = $true
+                    }
+                    elseif ($line -cmatch "^Logon\sType:\s+(\S.*)") {
+                        $LogonType = $Matches[1]
+                    }
+                    elseif ($line -cmatch "^New\sLogon:$") {
+                        $SubjectSection = $false
+                        $NewLogonSection = $true
+                    }
+                    elseif ($line -cmatch "^Network\sInformation:$") {
+                        $NewLogonSection = $false
+                        $NetworkInformationSection = $true
+                    }
+                    elseif ($SubjectSection) {
+                        if ($line -cmatch "^\s+Account\sName:\s+(\S.*)") {
+                            $AccountName = $Matches[1]
+                        }
+                        elseif ($line -cmatch "^\s+Account\sDomain:\s+(\S.*)") {
+                            $AccountDomain = $Matches[1]
+                        }
+                    }
+                    elseif ($NewLogonSection) {
+                        if ($line -cmatch "^\s+Account\sName:\s+(\S.*)") {
+                            $NewLogonAccountName = $Matches[1]
+                        }
+                        elseif ($line -cmatch "^\s+Account\sDomain:\s+(\S.*)") {
+                            $NewLogonAccountDomain = $Matches[1]
+                        }
+                    }
+                    elseif ($NetworkInformationSection) {
+                        if ($line -cmatch "^\s+Workstation\sName:\s+(\S.*)") {
+                            $WorkstationName = $Matches[1]
+                        }
+                        elseif ($line -cmatch "^\s+Source\sNetwork\sAddress:\s+(\S.*)") {
+                            $SourceNetworkAddress = $Matches[1]
+                        }
+                        elseif ($line -cmatch "^\s+Source\sPort:\s+(\S.*)") {
+                            $SourcePort = $Matches[1]
+                        }
+                    }
+                }
+
+                #Filter out logins that don't matter
+                if (-not ($NewLogonAccountDomain -cmatch "NT\sAUTHORITY" -or $NewLogonAccountDomain -cmatch "Window\sManager")) {
+                    $Key = $AccountName + $AccountDomain + $NewLogonAccountName + $NewLogonAccountDomain + $LogonType + $WorkstationName + $SourceNetworkAddress + $SourcePort
+                    if (-not $ReturnInfo.ContainsKey($Key)) {
+                        $Properties = @{
+                            LogType               = 4624
+                            LogSource             = "Security"
+                            SourceAccountName     = $AccountName
+                            SourceDomainName      = $AccountDomain
+                            NewLogonAccountName   = $NewLogonAccountName
+                            NewLogonAccountDomain = $NewLogonAccountDomain
+                            LogonType             = $LogonType
+                            WorkstationName       = $WorkstationName
+                            SourceNetworkAddress  = $SourceNetworkAddress
+                            SourcePort            = $SourcePort
+                            Count                 = 1
+                            Times                 = @($Logon.TimeGenerated)
+                        }
+
+                        $ResultObj = New-Object PSObject -Property $Properties
+                        $ReturnInfo.Add($Key, $ResultObj)
+                    }
+                    else {
+                        $ReturnInfo[$Key].Count++
+                        $ReturnInfo[$Key].Times += , $Logon.TimeGenerated
+                    }
+                }
+            }
+
+            return $ReturnInfo
+        }
+        Function Find-PSScriptsInPSAppLog {
+            $ReturnInfo = @{}
+            $Logs = Get-WinEvent -LogName "Microsoft-Windows-PowerShell/Operational" -FilterXPath "*[System[EventID=4100]]" -ErrorAction SilentlyContinue
+
+            foreach ($Log in $Logs) {
+                $ContainsScriptName = $false
+                $LogDetails = $Log.Message -split "`r`n"
+
+                $FoundScriptName = $false
+                foreach ($Line in $LogDetails) {
+                    if ($Line -imatch "^\s*Script\sName\s=\s(.+)") {
+                        $ScriptName = $Matches[1]
+                        $FoundScriptName = $true
+                    }
+                    elseif ($Line -imatch "^\s*User\s=\s(.*)") {
+                        $User = $Matches[1]
+                    }
+                }
+
+                if ($FoundScriptName) {
+                    $Key = $ScriptName + "::::" + $User
+
+                    if (!$ReturnInfo.ContainsKey($Key)) {
+                        $Properties = @{
+                            ScriptName = $ScriptName
+                            UserName   = $User
+                            Count      = 1
+                            Times      = @($Log.TimeCreated)
+                        }
+
+                        $Item = New-Object PSObject -Property $Properties
+                        $ReturnInfo.Add($Key, $Item)
+                    }
+                    else {
+                        $ReturnInfo[$Key].Count++
+                        $ReturnInfo[$Key].Times += , $Log.TimeCreated
+                    }
+                }
+            }
+
+            return $ReturnInfo
+        }
+        Function Find-RDPClientConnections {
+            $ReturnInfo = @{}
+
+            New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS | Out-Null
+
+            #Attempt to enumerate the servers for all users
+            $Users = Get-ChildItem -Path "HKU:\"
+            foreach ($UserSid in $Users.PSChildName) {
+                $Servers = Get-ChildItem "HKU:\$($UserSid)\Software\Microsoft\Terminal Server Client\Servers" -ErrorAction SilentlyContinue
+
+                foreach ($Server in $Servers) {
+                    $Server = $Server.PSChildName
+                    $UsernameHint = (Get-ItemProperty -Path "HKU:\$($UserSid)\Software\Microsoft\Terminal Server Client\Servers\$($Server)").UsernameHint
+
+                    $Key = $UserSid + "::::" + $Server + "::::" + $UsernameHint
+
+                    if (!$ReturnInfo.ContainsKey($Key)) {
+                        $SIDObj = New-Object System.Security.Principal.SecurityIdentifier($UserSid)
+                        $User = ($SIDObj.Translate([System.Security.Principal.NTAccount])).Value
+
+                        $Properties = @{
+                            CurrentUser  = $User
+                            Server       = $Server
+                            UsernameHint = $UsernameHint
+                        }
+
+                        $Item = New-Object PSObject -Property $Properties
+                        $ReturnInfo.Add($Key, $Item)
+                    }
+                }
+            }
+
+            return $ReturnInfo
+        }
+
+        # Extract data from Get-ComputerDetails suite of cmdlets
+        Find-RDPClientConnections | Format-List > TR3PS\registry\RDPconnections.html
+        $RDPconnectionsA = Get-Content TR3PS\registry\RDPconnections.html
+        $RDPconnections = $RDPconnectionsA | foreach {$_ + "<br />"}
+
+        Find-PSScriptsInPSAppLog | Format-List > TR3PS\registry\psscripts.html
+        $psscriptsA = Get-Content TR3PS\registry\psscripts.html
+        $psscripts = $psscriptsA | foreach {$_ + "<br />"}
+
+        $SecurityLog = Get-EventLog -LogName Security
+        Find-4624Logons $SecurityLog | Format-List > TR3PS\registry\4624logons.html
+        $4624A = Get-Content TR3PS\registry\4624logons.html
+        $4624 = $4624A | foreach {$_ + "<br />"}
+
+        Find-4648Logons $SecurityLog | Format-List > TR3PS\registry\4648logons.html
+        $4648A = Get-Content TR3PS\registry\4648logons.html
+        $4648 = $4648A | foreach {$_ + "<br />"}
+        #>
+    }
+
+    # Extract Email Details
+    if (-Not ($email)) {
+        echo "<p><strong>emails not extracted...</strong><br /><br />" >> TR3PS\web\email-subjects.html
+        echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; To extract emails, run TR3PS with the [email] command-line switch:<br /><br />" >> TR3PS\web\email-subjects.html
+        echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; PS C:\> .\TR3PS.ps1 -email" >> TR3PS\web\email-subjects.html
+        echo "<br /><br />" >> TR3PS\web\email-subjects.html
+        echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; This was skipped because email extraction takes a very long time.<br />" >> TR3PS\web\email-subjects.html
+        echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; This also closes the user's email client and tends to leave the Outlook process hanging...</strong></p><br />" >> TR3PS\web\email-subjects.html
+        copy TR3PS\web\email-subjects.html TR3PS\web\email-links.html
+        $emailSubjects = get-content TR3PS\web\email-subjects.html
+        $emailLinks = get-content TR3PS\web\email-links.html
+    }
+    else {
+        if ($email -eq $true) {
+            # Close outlook, so we can extract the emails
+            Get-Process OUTLOOK | Foreach-Object { $_.CloseMainWindow() | Out-Null } | stop-process �force > $null 2>&1
+            Write-Host "Extracting emails... This may take a few minutes!"
+            Function Get-OutlookInBox {
+                Add-type -assembly "Microsoft.Office.Interop.Outlook" | out-null
+                $olFolders = "Microsoft.Office.Interop.Outlook.olDefaultFolders" -as [type]
+                $outlook = new-object -comobject outlook.application
+                $namespace = $outlook.GetNameSpace("MAPI")
+                $folder = $namespace.getDefaultFolder($olFolders::olFolderInBox)
+                $folder.items |
+                    Select-Object -Property * -Last 50
+            }
+            $inbox = Get-OutlookInBox
+            $inbox | Select-Object -Property SenderName, Subject, ReceivedTime > TR3PS\web\email-subjects.html
+            $inbox | Select Body | findstr http > TR3PS\web\email-links.html
+            $getEmailLinks = 'TR3PS\web\email-links.html'
+            $emailLinkRegex = "([a-zA-Z]{3,})://([\w-]+\.)+[\w-]+(/[\w- ./?%&=]*).*?"
+            $emailLinksA = select-string -Path $getEmailLinks -Pattern $emailLinkRegex -AllMatches | % { $_.Matches } | % { $_.Value }
+            $emailSubjectsA = Get-Content TR3PS\web\email-subjects.html
+            $emailSubjects = $emailSubjectsA | foreach {$_ + "<br />"}
+            $emailLinks = $emailLinksA | foreach {$_ + "<br />"}
+            Stop-Process -Name OUTLOOK -Force
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1234 -Message "Optional : Client Email Data Extracted"
+        }
+        Else {
+            Write-Host "Missing Required Parameter [email]"
+            Write-Host "     This option was specified "
+            Write-Host "PS C:\> .\TR3PS.ps1 -email"
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
+            Exit 1
         }
     }
-}
-Take-ScreenShot -screen -file "c:\screenshot.png" -imagetype png
 
-# convert the image to Base64 for inclusion in the HTML report
-$path = "c:\screenshot.png"
-$screenshot = [convert]::ToBase64String((get-content $path -encoding byte))
-move $path .\TR3PS\config\screenshot.png
+    # PowerShell Profile
+    if ( Test-Path $profile ) {
+        $PSprofileA = type $profile
+        $PSProfile = $PSProfileA | foreach {$_ + "<br />"}
+    }
+    else {
+        $PSprofile = "<br />No PowerShell Profile File Found:<br /><br />"
+    }
+
+    # Last File Created
+    $Nb_day = -7
+    $Driveletter = ([System.IO.DriveInfo]::getdrives() | Where-Object {$_.DriveType -ne 'Network'} | Select-Object -ExpandProperty Name)
+    $MinDate = ((Get-Date).AddDays($Nb_day).ToString("MM/dd/yyyy"))
+
+    # Potential Dangerous Programs, Scripts, Shortcuts, Office Macros, PDF
+
+    $File_Extension = @("*.exe", "*.pif", "*.application", "*.gadget", "*.msi", "*.msp", "*.com", "*.scr", "*.hta", "*.cpl", "*.msc", "*.jar", "*.bat", "*.cmd", "*.vb", "*.vbs", "*.vbe", "*.js", "*.jse", "*.ws", "*.wsf", "*.wsc", "*.wsh", "*.wsh", "*.ps1", "*.ps1xml", "*.ps2", "*.ps2xml", "*.psc1", "*.psc2", "*.msh", "*.msh1", "*.msh2", "*.mshxml", "*.msh1xml", "*.msh2xml", "*.scf", "*.lnk", "*.inf", "*.reg", "*.doc", "*.xls", "*.ppt", "*.docm", "*.dotm", "*.xlsm", "*.xltm", "*.xlam", "*.pptm", "*.potm", "*.ppam", "*.ppsm", "*.sldm", "*.pdf")
 
 
-# Capture Log and Registry Data using cmdlets from Get-ComputerDetails
-# Awesome cmdlets stolen from:
-#    https://raw.githubusercontent.com/clymb3r/PowerShell/master/Get-ComputerDetails/Get-ComputerDetails.ps1
-if ( $remote -eq $true ) {
 
-    # I Suck at PowerShell, anyone know how to mitigate the memory issue so that Kansa cmdlets can run remotely?
+    Foreach ( $item in $Driveletter) {
+        $Drive = $item -creplace '^*\\', ''
+        $DangerousFiles = $DangerousFiles + (Get-ChildItem $Drive -Recurse -ErrorAction $ErrorActionPreference -include $File_Extension | Where-Object { $_.CreationTime -ge $MinDate } | Select-Object FullName, CreationTime, LastAccessTime, LastWriteTime, @{Name = "Kbytes"; Expression = {$_.Length / 1Kb}} |Sort-Object CreationTime)
+    }
+    $DangerousFiles = $DangerousFiles | ConvertTo-Html -Fragment
+    #=======================================================================================
+    # Evidence Verification
+    #=======================================================================================
 
-    $RDPconnections = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
-    Unless the shell memory is expanded...<br /><br />
-    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
-    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
-
-    $psscripts = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
-    Unless the shell memory is expanded...<br /><br />
-    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
-    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
-
-    $4624 = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
-    Unless the shell memory is expanded...<br /><br />
-    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
-    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
-
-    $4648 = "<p>Unfortunately his data cannot be pulled when TR3PS is run remotely<br />
-    Unless the shell memory is expanded...<br /><br />
-    The workaround is to set the Shell Memory Limit using the following command on the target host:<br />
-    &nbsp;&nbsp;&nbsp;&nbsp;PS C:\> Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 1024 -force</p>"
-
-} Else {
-
-    function Find-4648Logons
-    {
+    # Hash collected evidence files to verify authenticity
+    # script stolen from:
+    #      https://gallery.technet.microsoft.com/scriptcenter/Get-Hashes-of-Files-1d85de46
+    function Get-FileHash {
+        [CmdletBinding()]
         Param(
-            $SecurityLog
+            [Parameter(Position = 0, Mandatory = $true, ValueFromPipelineByPropertyName = $true, ValueFromPipeline = $True)]
+            [Alias("PSPath", "FullName")]
+            [string[]]$Path,
+
+            [Parameter(Position = 1)]
+            [ValidateSet("MD5", "SHA1", "SHA256", "SHA384", "SHA512", "RIPEMD160")]
+            [string[]]$Algorithm = "SHA256"
         )
+        Process {
+            ForEach ($item in $Path) {
+                $item = (Resolve-Path $item).ProviderPath
+                If (-Not ([uri]$item).IsAbsoluteUri) {
+                    Write-Verbose ("{0} is not a full path, using current directory: {1}" -f $item, $pwd)
+                    $item = (Join-Path $pwd ($item -replace "\.\\", ""))
+                }
+                If (Test-Path $item -Type Container) {
+                    Write-Warning ("Cannot calculate hash for directory: {0}" -f $item)
+                    Return
+                }
+                $object = New-Object PSObject -Property @{
+                    Path = $item
+                }
+                #Open the Stream
+                $stream = ([IO.StreamReader]$item).BaseStream
+                foreach ($Type in $Algorithm) {
+                    [string]$hash = -join ([Security.Cryptography.HashAlgorithm]::Create( $Type ).ComputeHash( $stream ) |
+                            ForEach { "{0:x2}" -f $_ })
+                    $null = $stream.Seek(0, 0)
+                    #If multiple algorithms are used, then they will be added to existing object
+                    $object = Add-Member -InputObject $Object -MemberType NoteProperty -Name $Type -Value $Hash -PassThru
+                }
+                $object.pstypenames.insert(0, 'System.IO.FileInfo.Hash')
+                #Output an object with the hash, algorithm and path
+                Write-Output $object
 
-        $ExplicitLogons = $SecurityLog | Where {$_.InstanceID -eq 4648}
-        $ReturnInfo = @{}
-
-        foreach ($ExplicitLogon in $ExplicitLogons)
-        {
-            $Subject = $false
-            $AccountWhosCredsUsed = $false
-            $TargetServer = $false
-            $SourceAccountName = ""
-            $SourceAccountDomain = ""
-            $TargetAccountName = ""
-            $TargetAccountDomain = ""
-            $TargetServer = ""
-            foreach ($line in $ExplicitLogon.Message -split "\r\n")
-            {
-                if ($line -cmatch "^Subject:$")
-                {
-                    $Subject = $true
-                }
-                elseif ($line -cmatch "^Account\sWhose\sCredentials\sWere\sUsed:$")
-                {
-                    $Subject = $false
-                    $AccountWhosCredsUsed = $true
-                }
-                elseif ($line -cmatch "^Target\sServer:")
-                {
-                    $AccountWhosCredsUsed = $false
-                    $TargetServer = $true
-                }
-                elseif ($Subject -eq $true)
-                {
-                    if ($line -cmatch "\s+Account\sName:\s+(\S.*)")
-                    {
-                        $SourceAccountName = $Matches[1]
-                    }
-                    elseif ($line -cmatch "\s+Account\sDomain:\s+(\S.*)")
-                    {
-                        $SourceAccountDomain = $Matches[1]
-                    }
-                }
-                elseif ($AccountWhosCredsUsed -eq $true)
-                {
-                    if ($line -cmatch "\s+Account\sName:\s+(\S.*)")
-                    {
-                        $TargetAccountName = $Matches[1]
-                    }
-                    elseif ($line -cmatch "\s+Account\sDomain:\s+(\S.*)")
-                    {
-                        $TargetAccountDomain = $Matches[1]
-                    }
-                }
-                elseif ($TargetServer -eq $true)
-                {
-                    if ($line -cmatch "\s+Target\sServer\sName:\s+(\S.*)")
-                    {
-                        $TargetServer = $Matches[1]
-                    }
-                }
-            }
-
-            #Filter out logins that don't matter
-            if (-not ($TargetAccountName -cmatch "^DWM-.*" -and $TargetAccountDomain -cmatch "^Window\sManager$"))
-            {
-                $Key = $SourceAccountName + $SourceAccountDomain + $TargetAccountName + $TargetAccountDomain + $TargetServer
-                if (-not $ReturnInfo.ContainsKey($Key))
-                {
-                    $Properties = @{
-                        LogType = 4648
-                        LogSource = "Security"
-                        SourceAccountName = $SourceAccountName
-                        SourceDomainName = $SourceAccountDomain
-                        TargetAccountName = $TargetAccountName
-                        TargetDomainName = $TargetAccountDomain
-                        TargetServer = $TargetServer
-                        Count = 1
-                        Times = @($ExplicitLogon.TimeGenerated)
-                    }
-
-                    $ResultObj = New-Object PSObject -Property $Properties
-                    $ReturnInfo.Add($Key, $ResultObj)
-                }
-                else
-                {
-                    $ReturnInfo[$Key].Count++
-                    $ReturnInfo[$Key].Times += ,$ExplicitLogon.TimeGenerated
-                }
+                #Close the stream
+                $stream.Close()
             }
         }
-
-        return $ReturnInfo
-    }
-    function Find-4624Logons
-    {
-        Param (
-            $SecurityLog
-        )
-
-        $Logons = $SecurityLog | Where {$_.InstanceID -eq 4624}
-        $ReturnInfo = @{}
-
-        foreach ($Logon in $Logons)
-        {
-            $SubjectSection = $false
-            $NewLogonSection = $false
-            $NetworkInformationSection = $false
-            $AccountName = ""
-            $AccountDomain = ""
-            $LogonType = ""
-            $NewLogonAccountName = ""
-            $NewLogonAccountDomain = ""
-            $WorkstationName = ""
-            $SourceNetworkAddress = ""
-            $SourcePort = ""
-
-            foreach ($line in $Logon.Message -Split "\r\n")
-            {
-                if ($line -cmatch "^Subject:$")
-                {
-                    $SubjectSection = $true
-                }
-                elseif ($line -cmatch "^Logon\sType:\s+(\S.*)")
-                {
-                    $LogonType = $Matches[1]
-                }
-                elseif ($line -cmatch "^New\sLogon:$")
-                {
-                    $SubjectSection = $false
-                    $NewLogonSection = $true
-                }
-                elseif ($line -cmatch "^Network\sInformation:$")
-                {
-                    $NewLogonSection = $false
-                    $NetworkInformationSection = $true
-                }
-                elseif ($SubjectSection)
-                {
-                    if ($line -cmatch "^\s+Account\sName:\s+(\S.*)")
-                    {
-                        $AccountName = $Matches[1]
-                    }
-                    elseif ($line -cmatch "^\s+Account\sDomain:\s+(\S.*)")
-                    {
-                        $AccountDomain = $Matches[1]
-                    }
-                }
-                elseif ($NewLogonSection)
-                {
-                    if ($line -cmatch "^\s+Account\sName:\s+(\S.*)")
-                    {
-                        $NewLogonAccountName = $Matches[1]
-                    }
-                    elseif ($line -cmatch "^\s+Account\sDomain:\s+(\S.*)")
-                    {
-                        $NewLogonAccountDomain = $Matches[1]
-                    }
-                }
-                elseif ($NetworkInformationSection)
-                {
-                    if ($line -cmatch "^\s+Workstation\sName:\s+(\S.*)")
-                    {
-                        $WorkstationName = $Matches[1]
-                    }
-                    elseif ($line -cmatch "^\s+Source\sNetwork\sAddress:\s+(\S.*)")
-                    {
-                        $SourceNetworkAddress = $Matches[1]
-                    }
-                    elseif ($line -cmatch "^\s+Source\sPort:\s+(\S.*)")
-                    {
-                        $SourcePort = $Matches[1]
-                    }
-                }
-            }
-
-            #Filter out logins that don't matter
-            if (-not ($NewLogonAccountDomain -cmatch "NT\sAUTHORITY" -or $NewLogonAccountDomain -cmatch "Window\sManager"))
-            {
-                $Key = $AccountName + $AccountDomain + $NewLogonAccountName + $NewLogonAccountDomain + $LogonType + $WorkstationName + $SourceNetworkAddress + $SourcePort
-                if (-not $ReturnInfo.ContainsKey($Key))
-                {
-                    $Properties = @{
-                        LogType = 4624
-                        LogSource = "Security"
-                        SourceAccountName = $AccountName
-                        SourceDomainName = $AccountDomain
-                        NewLogonAccountName = $NewLogonAccountName
-                        NewLogonAccountDomain = $NewLogonAccountDomain
-                        LogonType = $LogonType
-                        WorkstationName = $WorkstationName
-                        SourceNetworkAddress = $SourceNetworkAddress
-                        SourcePort = $SourcePort
-                        Count = 1
-                        Times = @($Logon.TimeGenerated)
-                    }
-
-                    $ResultObj = New-Object PSObject -Property $Properties
-                    $ReturnInfo.Add($Key, $ResultObj)
-                }
-                else
-                {
-                    $ReturnInfo[$Key].Count++
-                    $ReturnInfo[$Key].Times += ,$Logon.TimeGenerated
-                }
-            }
-        }
-
-        return $ReturnInfo
-    }
-    Function Find-PSScriptsInPSAppLog {
-        $ReturnInfo = @{}
-        $Logs = Get-WinEvent -LogName "Microsoft-Windows-PowerShell/Operational" -FilterXPath "*[System[EventID=4100]]" -ErrorAction SilentlyContinue
-
-        foreach ($Log in $Logs)
-        {
-            $ContainsScriptName = $false
-            $LogDetails = $Log.Message -split "`r`n"
-
-            $FoundScriptName = $false
-            foreach($Line in $LogDetails)
-            {
-                if ($Line -imatch "^\s*Script\sName\s=\s(.+)")
-                {
-                    $ScriptName = $Matches[1]
-                    $FoundScriptName = $true
-                }
-                elseif ($Line -imatch "^\s*User\s=\s(.*)")
-                {
-                    $User = $Matches[1]
-                }
-            }
-
-            if ($FoundScriptName)
-            {
-                $Key = $ScriptName + "::::" + $User
-
-                if (!$ReturnInfo.ContainsKey($Key))
-                {
-                    $Properties = @{
-                        ScriptName = $ScriptName
-                        UserName = $User
-                        Count = 1
-                        Times = @($Log.TimeCreated)
-                    }
-
-                    $Item = New-Object PSObject -Property $Properties
-                    $ReturnInfo.Add($Key, $Item)
-                }
-                else
-                {
-                    $ReturnInfo[$Key].Count++
-                    $ReturnInfo[$Key].Times += ,$Log.TimeCreated
-                }
-            }
-        }
-
-        return $ReturnInfo
-    }
-    Function Find-RDPClientConnections {
-        $ReturnInfo = @{}
-
-        New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS | Out-Null
-
-        #Attempt to enumerate the servers for all users
-        $Users = Get-ChildItem -Path "HKU:\"
-        foreach ($UserSid in $Users.PSChildName)
-        {
-            $Servers = Get-ChildItem "HKU:\$($UserSid)\Software\Microsoft\Terminal Server Client\Servers" -ErrorAction SilentlyContinue
-
-            foreach ($Server in $Servers)
-            {
-                $Server = $Server.PSChildName
-                $UsernameHint = (Get-ItemProperty -Path "HKU:\$($UserSid)\Software\Microsoft\Terminal Server Client\Servers\$($Server)").UsernameHint
-
-                $Key = $UserSid + "::::" + $Server + "::::" + $UsernameHint
-
-                if (!$ReturnInfo.ContainsKey($Key))
-                {
-                    $SIDObj = New-Object System.Security.Principal.SecurityIdentifier($UserSid)
-                    $User = ($SIDObj.Translate([System.Security.Principal.NTAccount])).Value
-
-                    $Properties = @{
-                        CurrentUser = $User
-                        Server = $Server
-                        UsernameHint = $UsernameHint
-                    }
-
-                    $Item = New-Object PSObject -Property $Properties
-                    $ReturnInfo.Add($Key, $Item)
-                }
-            }
-        }
-
-        return $ReturnInfo
     }
 
-    # Extract data from Get-ComputerDetails suite of cmdlets
-    Find-RDPClientConnections | Format-List > TR3PS\registry\RDPconnections.html
-    $RDPconnectionsA = Get-Content TR3PS\registry\RDPconnections.html
-    $RDPconnections = $RDPconnectionsA | foreach {$_ + "<br />"}
+    Get-Process | Where-Object {-not [string]::IsNullOrEmpty($_.Path)} | Select-Object Path -Unique | sort | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment >> TR3PS\process\process-hashes.html
+    $processHashes = Get-Content TR3PS\process\process-hashes.html
 
-    Find-PSScriptsInPSAppLog | Format-List > TR3PS\registry\psscripts.html
-    $psscriptsA = Get-Content TR3PS\registry\psscripts.html
-    $psscripts = $psscriptsA | foreach {$_ + "<br />"}
+    $powershellHashes = "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment
 
-    $SecurityLog = Get-EventLog -LogName Security
-    Find-4624Logons $SecurityLog | Format-List > TR3PS\registry\4624logons.html
-    $4624A = Get-Content TR3PS\registry\4624logons.html
-    $4624 = $4624A | foreach {$_ + "<br />"}
+    $downloadHashes = Get-ChildItem C:\Users\*\Downloads\ -Recurse | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment > TR3PS\web\download-hashes.html
 
-    Find-4648Logons $SecurityLog | Format-List > TR3PS\registry\4648logons.html
-    $4648A = Get-Content TR3PS\registry\4648logons.html
-    $4648 = $4648A | foreach {$_ + "<br />"}
-#>
-}
+    Get-ChildItem TR3PS\ -Recurse -Filter *.html | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment > TR3PS\config\e-hashes.html
+    Get-Content TR3PS\config\e-hashes.html | Select-String -pattern 'e-hashes' -notmatch | Out-File TR3PS\config\evidence-hashes.html
+    rm TR3PS\config\e-hashes.html -Force
+    $evidenceHashes = type TR3PS\config\evidence-hashes.html
 
-# Extract Email Details
-if(-Not ($email)) {
-    echo "<p><strong>emails not extracted...</strong><br /><br />" >> TR3PS\web\email-subjects.html
-    echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; To extract emails, run TR3PS with the [email] command-line switch:<br /><br />" >> TR3PS\web\email-subjects.html
-    echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; PS C:\> .\TR3PS.ps1 -email" >> TR3PS\web\email-subjects.html
-    echo "<br /><br />" >> TR3PS\web\email-subjects.html
-    echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; This was skipped because email extraction takes a very long time.<br />" >> TR3PS\web\email-subjects.html
-    echo "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; This also closes the user's email client and tends to leave the Outlook process hanging...</strong></p><br />" >> TR3PS\web\email-subjects.html
-    copy TR3PS\web\email-subjects.html TR3PS\web\email-links.html
-    $emailSubjects = get-content TR3PS\web\email-subjects.html
-    $emailLinks = get-content TR3PS\web\email-links.html
-} else {
-    if ($email -eq $true) {
-    # Close outlook, so we can extract the emails
-    Get-Process OUTLOOK | Foreach-Object { $_.CloseMainWindow() | Out-Null } | stop-process �force > $null 2>&1
-    Write-Host "Extracting emails... This may take a few minutes!"
-        Function Get-OutlookInBox {
-            Add-type -assembly "Microsoft.Office.Interop.Outlook" | out-null
-            $olFolders = "Microsoft.Office.Interop.Outlook.olDefaultFolders" -as [type]
-            $outlook = new-object -comobject outlook.application
-            $namespace = $outlook.GetNameSpace("MAPI")
-            $folder = $namespace.getDefaultFolder($olFolders::olFolderInBox)
-            $folder.items |
-            Select-Object -Property * -Last 50
-        }
-    $inbox = Get-OutlookInBox
-    $inbox | Select-Object -Property SenderName, Subject, ReceivedTime > TR3PS\web\email-subjects.html
-    $inbox | Select Body | findstr http > TR3PS\web\email-links.html
-    $getEmailLinks = 'TR3PS\web\email-links.html'
-    $emailLinkRegex = "([a-zA-Z]{3,})://([\w-]+\.)+[\w-]+(/[\w- ./?%&=]*).*?"
-    $emailLinksA = select-string -Path $getEmailLinks -Pattern $emailLinkRegex -AllMatches | % { $_.Matches } | % { $_.Value }
-    $emailSubjectsA = Get-Content TR3PS\web\email-subjects.html
-    $emailSubjects = $emailSubjectsA | foreach {$_ + "<br />"}
-    $emailLinks = $emailLinksA | foreach {$_ + "<br />"}
-    Stop-Process -Name OUTLOOK -Force
-    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1234 -Message "Optional : Client Email Data Extracted"
-    } Else {
-        Write-Host "Missing Required Parameter [email]"
-        Write-Host "     This option was specified "
-        Write-Host "PS C:\> .\TR3PS.ps1 -email"
-        Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
-        Exit 1
-    }
-}
+    #=======================================================================================
+    # Report Generation
+    #=======================================================================================
 
-# PowerShell Profile
-if ( Test-Path $profile ) {
-    $PSprofileA = type $profile
-    $PSProfile = $PSProfileA | foreach {$_ + "<br />"}
-} else {
-    $PSprofile = "<br />No PowerShell Profile File Found:<br /><br />"
-}
+    # Create system profile report in HTML
+    $html = $("TR3PS\TR3PS_" + $dateString + "_" + $computerName + ".html")
 
-# Last File Created
-$Nb_day = -7
-$Driveletter = ([System.IO.DriveInfo]::getdrives() | Where-Object {$_.DriveType -ne 'Network'} | Select-Object -ExpandProperty Name)
-$MinDate = ((Get-Date).AddDays($Nb_day).ToString("MM/dd/yyyy"))
-
-# Potential Dangerous Programs, Scripts, Shortcuts, Office Macros, PDF
-
-$File_Extension = @("*.exe","*.pif","*.application","*.gadget","*.msi","*.msp","*.com","*.scr","*.hta","*.cpl","*.msc","*.jar","*.bat","*.cmd","*.vb","*.vbs","*.vbe","*.js","*.jse","*.ws","*.wsf","*.wsc","*.wsh","*.wsh","*.ps1","*.ps1xml","*.ps2","*.ps2xml","*.psc1","*.psc2","*.msh","*.msh1","*.msh2","*.mshxml","*.msh1xml","*.msh2xml","*.scf","*.lnk","*.inf","*.reg","*.doc","*.xls","*.ppt","*.docm","*.dotm","*.xlsm","*.xltm","*.xlam","*.pptm","*.potm","*.ppam","*.ppsm","*.sldm","*.pdf")
-
-
-
-Foreach ( $item in $Driveletter)
- {
-	$Drive = $item -creplace '^*\\', ''
-	 $DangerousFiles = $DangerousFiles + (Get-ChildItem $Drive -Recurse -ErrorAction $ErrorActionPreference -include $File_Extension | Where-Object { $_.CreationTime -ge $MinDate } | Select-Object FullName, CreationTime, LastAccessTime, LastWriteTime, @{Name="Kbytes";Expression={$_.Length / 1Kb}} |Sort-Object CreationTime)
-}
-$DangerousFiles = $DangerousFiles | ConvertTo-Html -Fragment
-#=======================================================================================
-# Evidence Verification
-#=======================================================================================
-
-# Hash collected evidence files to verify authenticity
-# script stolen from:
-#      https://gallery.technet.microsoft.com/scriptcenter/Get-Hashes-of-Files-1d85de46
-function Get-FileHash {
-    [CmdletBinding()]
-    Param(
-       [Parameter(Position=0,Mandatory=$true, ValueFromPipelineByPropertyName=$true,ValueFromPipeline=$True)]
-       [Alias("PSPath","FullName")]
-       [string[]]$Path,
-
-       [Parameter(Position=1)]
-       [ValidateSet("MD5","SHA1","SHA256","SHA384","SHA512","RIPEMD160")]
-       [string[]]$Algorithm = "SHA256"
-    )
-    Process {
-        ForEach ($item in $Path) {
-            $item = (Resolve-Path $item).ProviderPath
-            If (-Not ([uri]$item).IsAbsoluteUri) {
-                Write-Verbose ("{0} is not a full path, using current directory: {1}" -f $item,$pwd)
-                $item = (Join-Path $pwd ($item -replace "\.\\",""))
-            }
-           If(Test-Path $item -Type Container) {
-              Write-Warning ("Cannot calculate hash for directory: {0}" -f $item)
-              Return
-           }
-           $object = New-Object PSObject -Property @{
-                Path = $item
-            }
-            #Open the Stream
-            $stream = ([IO.StreamReader]$item).BaseStream
-            foreach($Type in $Algorithm) {
-                [string]$hash = -join ([Security.Cryptography.HashAlgorithm]::Create( $Type ).ComputeHash( $stream ) |
-                ForEach { "{0:x2}" -f $_ })
-                $null = $stream.Seek(0,0)
-                #If multiple algorithms are used, then they will be added to existing object
-                $object = Add-Member -InputObject $Object -MemberType NoteProperty -Name $Type -Value $Hash -PassThru
-            }
-            $object.pstypenames.insert(0,'System.IO.FileInfo.Hash')
-            #Output an object with the hash, algorithm and path
-            Write-Output $object
-
-            #Close the stream
-            $stream.Close()
-        }
-    }
-}
-
-Get-Process | Where-Object {-not [string]::IsNullOrEmpty($_.Path)} | Select-Object Path -Unique | sort | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment >> TR3PS\process\process-hashes.html
-$processHashes = Get-Content TR3PS\process\process-hashes.html
-
-$powershellHashes = "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment
-
-$downloadHashes = Get-ChildItem C:\Users\*\Downloads\ -Recurse | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment > TR3PS\web\download-hashes.html
-
-Get-ChildItem TR3PS\ -Recurse -Filter *.html | Get-FileHash -Algorithm SHA256 | ConvertTo-Html -Fragment > TR3PS\config\e-hashes.html
-Get-Content TR3PS\config\e-hashes.html | Select-String -pattern 'e-hashes' -notmatch | Out-File TR3PS\config\evidence-hashes.html
-rm TR3PS\config\e-hashes.html -Force
-$evidenceHashes = type TR3PS\config\evidence-hashes.html
-
-#=======================================================================================
-# Report Generation
-#=======================================================================================
-
-# Create system profile report in HTML
-$html = $("TR3PS\TR3PS_" + $dateString + "_" + $computerName + ".html")
-
-$htmlHead = @"
+    $htmlHead = @"
 <!-- &copy; LogRhythm - 2015 -->
 <!DOCTYPE html>
 <html>
@@ -1095,7 +1053,7 @@ $htmlHead = @"
 <title>TR3PS Report - $computerName</title>
 "@
 
-$htmlJS = @"
+    $htmlJS = @"
 <script type="text/javascript">//<![CDATA[
 /*! jQuery v2.1.3 | (c) 2005, 2014 jQuery Foundation, Inc. | jquery.org/license */
 !function(a,b){"object"==typeof module&&"object"==typeof module.exports?module.exports=a.document?b(a,!0):function(a){if(!a.document)throw new Error("jQuery requires a window with a document");return b(a)}:b(a)}("undefined"!=typeof window?window:this,function(a,b){var c=[],d=c.slice,e=c.concat,f=c.push,g=c.indexOf,h={},i=h.toString,j=h.hasOwnProperty,k={},l=a.document,m="2.1.3",n=function(a,b){return new n.fn.init(a,b)},o=/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+`$/g,p=/^-ms-/,q=/-([\da-z])/gi,r=function(a,b){return b.toUpperCase()};n.fn=n.prototype={jquery:m,constructor:n,selector:"",length:0,toArray:function(){return d.call(this)},get:function(a){return null!=a?0>a?this[a+this.length]:this[a]:d.call(this)},pushStack:function(a){var b=n.merge(this.constructor(),a);return b.prevObject=this,b.context=this.context,b},each:function(a,b){return n.each(this,a,b)},map:function(a){return this.pushStack(n.map(this,function(b,c){return a.call(b,c,b)}))},slice:function(){return this.pushStack(d.apply(this,arguments))},first:function(){return this.eq(0)},last:function(){return this.eq(-1)},eq:function(a){var b=this.length,c=+a+(0>a?b:0);return this.pushStack(c>=0&&b>c?[this[c]]:[])},end:function(){return this.prevObject||this.constructor(null)},push:f,sort:c.sort,splice:c.splice},n.extend=n.fn.extend=function(){var a,b,c,d,e,f,g=arguments[0]||{},h=1,i=arguments.length,j=!1;for("boolean"==typeof g&&(j=g,g=arguments[h]||{},h++),"object"==typeof g||n.isFunction(g)||(g={}),h===i&&(g=this,h--);i>h;h++)if(null!=(a=arguments[h]))for(b in a)c=g[b],d=a[b],g!==d&&(j&&d&&(n.isPlainObject(d)||(e=n.isArray(d)))?(e?(e=!1,f=c&&n.isArray(c)?c:[]):f=c&&n.isPlainObject(c)?c:{},g[b]=n.extend(j,f,d)):void 0!==d&&(g[b]=d));return g},n.extend({expando:"jQuery"+(m+Math.random()).replace(/\D/g,""),isReady:!0,error:function(a){throw new Error(a)},noop:function(){},isFunction:function(a){return"function"===n.type(a)},isArray:Array.isArray,isWindow:function(a){return null!=a&&a===a.window},isNumeric:function(a){return!n.isArray(a)&&a-parseFloat(a)+1>=0},isPlainObject:function(a){return"object"!==n.type(a)||a.nodeType||n.isWindow(a)?!1:a.constructor&&!j.call(a.constructor.prototype,"isPrototypeOf")?!1:!0},isEmptyObject:function(a){var b;for(b in a)return!1;return!0},type:function(a){return null==a?a+"":"object"==typeof a||"function"==typeof a?h[i.call(a)]||"object":typeof a},globalEval:function(a){var b,c=eval;a=n.trim(a),a&&(1===a.indexOf("use strict")?(b=l.createElement("script"),b.text=a,l.head.appendChild(b).parentNode.removeChild(b)):c(a))},camelCase:function(a){return a.replace(p,"ms-").replace(q,r)},nodeName:function(a,b){return a.nodeName&&a.nodeName.toLowerCase()===b.toLowerCase()},each:function(a,b,c){var d,e=0,f=a.length,g=s(a);if(c){if(g){for(;f>e;e++)if(d=b.apply(a[e],c),d===!1)break}else for(e in a)if(d=b.apply(a[e],c),d===!1)break}else if(g){for(;f>e;e++)if(d=b.call(a[e],e,a[e]),d===!1)break}else for(e in a)if(d=b.call(a[e],e,a[e]),d===!1)break;return a},trim:function(a){return null==a?"":(a+"").replace(o,"")},makeArray:function(a,b){var c=b||[];return null!=a&&(s(Object(a))?n.merge(c,"string"==typeof a?[a]:a):f.call(c,a)),c},inArray:function(a,b,c){return null==b?-1:g.call(b,a,c)},merge:function(a,b){for(var c=+b.length,d=0,e=a.length;c>d;d++)a[e++]=b[d];return a.length=e,a},grep:function(a,b,c){for(var d,e=[],f=0,g=a.length,h=!c;g>f;f++)d=!b(a[f],f),d!==h&&e.push(a[f]);return e},map:function(a,b,c){var d,f=0,g=a.length,h=s(a),i=[];if(h)for(;g>f;f++)d=b(a[f],f,c),null!=d&&i.push(d);else for(f in a)d=b(a[f],f,c),null!=d&&i.push(d);return e.apply([],i)},guid:1,proxy:function(a,b){var c,e,f;return"string"==typeof b&&(c=a[b],b=a,a=c),n.isFunction(a)?(e=d.call(arguments,2),f=function(){return a.apply(b||this,e.concat(d.call(arguments)))},f.guid=a.guid=a.guid||n.guid++,f):void 0},now:Date.now,support:k}),n.each("Boolean Number String Function Array Date RegExp Object Error".split(" "),function(a,b){h["[object "+b+"]"]=b.toLowerCase()});function s(a){var b=a.length,c=n.type(a);return"function"===c||n.isWindow(a)?!1:1===a.nodeType&&b?!0:"array"===c||0===b||"number"==typeof b&&b>0&&b-1 in a}var t=function(a){var b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u="sizzle"+1*new Date,v=a.document,w=0,x=0,y=hb(),z=hb(),A=hb(),B=function(a,b){return a===b&&(l=!0),0},C=1<<31,D={}.hasOwnProperty,E=[],F=E.pop,G=E.push,H=E.push,I=E.slice,J=function(a,b){for(var c=0,d=a.length;d>c;c++)if(a[c]===b)return c;return-1},K="checked|selected|async|autofocus|autoplay|controls|defer|disabled|hidden|ismap|loop|multiple|open|readonly|required|scoped",L="[\\x20\\t\\r\\n\\f]",M="(?:\\\\.|[\\w-]|[^\\x00-\\xa0])+",N=M.replace("w","w#"),O="\\["+L+"*("+M+")(?:"+L+"*([*^`$|!~]?=)"+L+"*(?:'((?:\\\\.|[^\\\\'])*)'|\"((?:\\\\.|[^\\\\\"])*)\"|("+N+"))|)"+L+"*\\]",P=":("+M+")(?:\\((('((?:\\\\.|[^\\\\'])*)'|\"((?:\\\\.|[^\\\\\"])*)\")|((?:\\\\.|[^\\\\()[\\]]|"+O+")*)|.*)\\)|)",Q=new RegExp(L+"+","g"),R=new RegExp("^"+L+"+|((?:^|[^\\\\])(?:\\\\.)*)"+L+"+`$","g"),S=new RegExp("^"+L+"*,"+L+"*"),T=new RegExp("^"+L+"*([>+~]|"+L+")"+L+"*"),U=new RegExp("="+L+"*([^\\]'\"]*?)"+L+"*\\]","g"),V=new RegExp(P),W=new RegExp("^"+N+"`$"),X={ID:new RegExp("^#("+M+")"),CLASS:new RegExp("^\\.("+M+")"),TAG:new RegExp("^("+M.replace("w","w*")+")"),ATTR:new RegExp("^"+O),PSEUDO:new RegExp("^"+P),CHILD:new RegExp("^:(only|first|last|nth|nth-last)-(child|of-type)(?:\\("+L+"*(even|odd|(([+-]|)(\\d*)n|)"+L+"*(?:([+-]|)"+L+"*(\\d+)|))"+L+"*\\)|)","i"),bool:new RegExp("^(?:"+K+")`$","i"),needsContext:new RegExp("^"+L+"*[>+~]|:(even|odd|eq|gt|lt|nth|first|last)(?:\\("+L+"*((?:-\\d)?\\d*)"+L+"*\\)|)(?=[^-]|`$)","i")},Y=/^(?:input|select|textarea|button)`$/i,Z=/^h\d`$/i,`$=/^[^{]+\{\s*\[native \w/,_=/^(?:#([\w-]+)|(\w+)|\.([\w-]+))`$/,ab=/[+~]/,bb=/'|\\/g,cb=new RegExp("\\\\([\\da-f]{1,6}"+L+"?|("+L+")|.)","ig"),db=function(a,b,c){var d="0x"+b-65536;return d!==d||c?b:0>d?String.fromCharCode(d+65536):String.fromCharCode(d>>10|55296,1023&d|56320)},eb=function(){m()};try{H.apply(E=I.call(v.childNodes),v.childNodes),E[v.childNodes.length].nodeType}catch(fb){H={apply:E.length?function(a,b){G.apply(a,I.call(b))}:function(a,b){var c=a.length,d=0;while(a[c++]=b[d++]);a.length=c-1}}}function gb(a,b,d,e){var f,h,j,k,l,o,r,s,w,x;if((b?b.ownerDocument||b:v)!==n&&m(b),b=b||n,d=d||[],k=b.nodeType,"string"!=typeof a||!a||1!==k&&9!==k&&11!==k)return d;if(!e&&p){if(11!==k&&(f=_.exec(a)))if(j=f[1]){if(9===k){if(h=b.getElementById(j),!h||!h.parentNode)return d;if(h.id===j)return d.push(h),d}else if(b.ownerDocument&&(h=b.ownerDocument.getElementById(j))&&t(b,h)&&h.id===j)return d.push(h),d}else{if(f[2])return H.apply(d,b.getElementsByTagName(a)),d;if((j=f[3])&&c.getElementsByClassName)return H.apply(d,b.getElementsByClassName(j)),d}if(c.qsa&&(!q||!q.test(a))){if(s=r=u,w=b,x=1!==k&&a,1===k&&"object"!==b.nodeName.toLowerCase()){o=g(a),(r=b.getAttribute("id"))?s=r.replace(bb,"\\`$&"):b.setAttribute("id",s),s="[id='"+s+"'] ",l=o.length;while(l--)o[l]=s+rb(o[l]);w=ab.test(a)&&pb(b.parentNode)||b,x=o.join(",")}if(x)try{return H.apply(d,w.querySelectorAll(x)),d}catch(y){}finally{r||b.removeAttribute("id")}}}return i(a.replace(R,"`$1"),b,d,e)}function hb(){var a=[];function b(c,e){return a.push(c+" ")>d.cacheLength&&delete b[a.shift()],b[c+" "]=e}return b}function ib(a){return a[u]=!0,a}function jb(a){var b=n.createElement("div");try{return!!a(b)}catch(c){return!1}finally{b.parentNode&&b.parentNode.removeChild(b),b=null}}function kb(a,b){var c=a.split("|"),e=a.length;while(e--)d.attrHandle[c[e]]=b}function lb(a,b){var c=b&&a,d=c&&1===a.nodeType&&1===b.nodeType&&(~b.sourceIndex||C)-(~a.sourceIndex||C);if(d)return d;if(c)while(c=c.nextSibling)if(c===b)return-1;return a?1:-1}function mb(a){return function(b){var c=b.nodeName.toLowerCase();return"input"===c&&b.type===a}}function nb(a){return function(b){var c=b.nodeName.toLowerCase();return("input"===c||"button"===c)&&b.type===a}}function ob(a){return ib(function(b){return b=+b,ib(function(c,d){var e,f=a([],c.length,b),g=f.length;while(g--)c[e=f[g]]&&(c[e]=!(d[e]=c[e]))})})}function pb(a){return a&&"undefined"!=typeof a.getElementsByTagName&&a}c=gb.support={},f=gb.isXML=function(a){var b=a&&(a.ownerDocument||a).documentElement;return b?"HTML"!==b.nodeName:!1},m=gb.setDocument=function(a){var b,e,g=a?a.ownerDocument||a:v;return g!==n&&9===g.nodeType&&g.documentElement?(n=g,o=g.documentElement,e=g.defaultView,e&&e!==e.top&&(e.addEventListener?e.addEventListener("unload",eb,!1):e.attachEvent&&e.attachEvent("onunload",eb)),p=!f(g),c.attributes=jb(function(a){return a.className="i",!a.getAttribute("className")}),c.getElementsByTagName=jb(function(a){return a.appendChild(g.createComment("")),!a.getElementsByTagName("*").length}),c.getElementsByClassName=`$.test(g.getElementsByClassName),c.getById=jb(function(a){return o.appendChild(a).id=u,!g.getElementsByName||!g.getElementsByName(u).length}),c.getById?(d.find.ID=function(a,b){if("undefined"!=typeof b.getElementById&&p){var c=b.getElementById(a);return c&&c.parentNode?[c]:[]}},d.filter.ID=function(a){var b=a.replace(cb,db);return function(a){return a.getAttribute("id")===b}}):(delete d.find.ID,d.filter.ID=function(a){var b=a.replace(cb,db);return function(a){var c="undefined"!=typeof a.getAttributeNode&&a.getAttributeNode("id");return c&&c.value===b}}),d.find.TAG=c.getElementsByTagName?function(a,b){return"undefined"!=typeof b.getElementsByTagName?b.getElementsByTagName(a):c.qsa?b.querySelectorAll(a):void 0}:function(a,b){var c,d=[],e=0,f=b.getElementsByTagName(a);if("*"===a){while(c=f[e++])1===c.nodeType&&d.push(c);return d}return f},d.find.CLASS=c.getElementsByClassName&&function(a,b){return p?b.getElementsByClassName(a):void 0},r=[],q=[],(c.qsa=`$.test(g.querySelectorAll))&&(jb(function(a){o.appendChild(a).innerHTML="<a id='"+u+"'></a><select id='"+u+"-\f]' msallowcapture=''><option selected=''></option></select>",a.querySelectorAll("[msallowcapture^='']").length&&q.push("[*^`$]="+L+"*(?:''|\"\")"),a.querySelectorAll("[selected]").length||q.push("\\["+L+"*(?:value|"+K+")"),a.querySelectorAll("[id~="+u+"-]").length||q.push("~="),a.querySelectorAll(":checked").length||q.push(":checked"),a.querySelectorAll("a#"+u+"+*").length||q.push(".#.+[+~]")}),jb(function(a){var b=g.createElement("input");b.setAttribute("type","hidden"),a.appendChild(b).setAttribute("name","D"),a.querySelectorAll("[name=d]").length&&q.push("name"+L+"*[*^`$|!~]?="),a.querySelectorAll(":enabled").length||q.push(":enabled",":disabled"),a.querySelectorAll("*,:x"),q.push(",.*:")})),(c.matchesSelector=`$.test(s=o.matches||o.webkitMatchesSelector||o.mozMatchesSelector||o.oMatchesSelector||o.msMatchesSelector))&&jb(function(a){c.disconnectedMatch=s.call(a,"div"),s.call(a,"[s!='']:x"),r.push("!=",P)}),q=q.length&&new RegExp(q.join("|")),r=r.length&&new RegExp(r.join("|")),b=`$.test(o.compareDocumentPosition),t=b||`$.test(o.contains)?function(a,b){var c=9===a.nodeType?a.documentElement:a,d=b&&b.parentNode;return a===d||!(!d||1!==d.nodeType||!(c.contains?c.contains(d):a.compareDocumentPosition&&16&a.compareDocumentPosition(d)))}:function(a,b){if(b)while(b=b.parentNode)if(b===a)return!0;return!1},B=b?function(a,b){if(a===b)return l=!0,0;var d=!a.compareDocumentPosition-!b.compareDocumentPosition;return d?d:(d=(a.ownerDocument||a)===(b.ownerDocument||b)?a.compareDocumentPosition(b):1,1&d||!c.sortDetached&&b.compareDocumentPosition(a)===d?a===g||a.ownerDocument===v&&t(v,a)?-1:b===g||b.ownerDocument===v&&t(v,b)?1:k?J(k,a)-J(k,b):0:4&d?-1:1)}:function(a,b){if(a===b)return l=!0,0;var c,d=0,e=a.parentNode,f=b.parentNode,h=[a],i=[b];if(!e||!f)return a===g?-1:b===g?1:e?-1:f?1:k?J(k,a)-J(k,b):0;if(e===f)return lb(a,b);c=a;while(c=c.parentNode)h.unshift(c);c=b;while(c=c.parentNode)i.unshift(c);while(h[d]===i[d])d++;return d?lb(h[d],i[d]):h[d]===v?-1:i[d]===v?1:0},g):n},gb.matches=function(a,b){return gb(a,null,null,b)},gb.matchesSelector=function(a,b){if((a.ownerDocument||a)!==n&&m(a),b=b.replace(U,"='`$1']"),!(!c.matchesSelector||!p||r&&r.test(b)||q&&q.test(b)))try{var d=s.call(a,b);if(d||c.disconnectedMatch||a.document&&11!==a.document.nodeType)return d}catch(e){}return gb(b,n,null,[a]).length>0},gb.contains=function(a,b){return(a.ownerDocument||a)!==n&&m(a),t(a,b)},gb.attr=function(a,b){(a.ownerDocument||a)!==n&&m(a);var e=d.attrHandle[b.toLowerCase()],f=e&&D.call(d.attrHandle,b.toLowerCase())?e(a,b,!p):void 0;return void 0!==f?f:c.attributes||!p?a.getAttribute(b):(f=a.getAttributeNode(b))&&f.specified?f.value:null},gb.error=function(a){throw new Error("Syntax error, unrecognized expression: "+a)},gb.uniqueSort=function(a){var b,d=[],e=0,f=0;if(l=!c.detectDuplicates,k=!c.sortStable&&a.slice(0),a.sort(B),l){while(b=a[f++])b===a[f]&&(e=d.push(f));while(e--)a.splice(d[e],1)}return k=null,a},e=gb.getText=function(a){var b,c="",d=0,f=a.nodeType;if(f){if(1===f||9===f||11===f){if("string"==typeof a.textContent)return a.textContent;for(a=a.firstChild;a;a=a.nextSibling)c+=e(a)}else if(3===f||4===f)return a.nodeValue}else while(b=a[d++])c+=e(b);return c},d=gb.selectors={cacheLength:50,createPseudo:ib,match:X,attrHandle:{},find:{},relative:{">":{dir:"parentNode",first:!0}," ":{dir:"parentNode"},"+":{dir:"previousSibling",first:!0},"~":{dir:"previousSibling"}},preFilter:{ATTR:function(a){return a[1]=a[1].replace(cb,db),a[3]=(a[3]||a[4]||a[5]||"").replace(cb,db),"~="===a[2]&&(a[3]=" "+a[3]+" "),a.slice(0,4)},CHILD:function(a){return a[1]=a[1].toLowerCase(),"nth"===a[1].slice(0,3)?(a[3]||gb.error(a[0]),a[4]=+(a[4]?a[5]+(a[6]||1):2*("even"===a[3]||"odd"===a[3])),a[5]=+(a[7]+a[8]||"odd"===a[3])):a[3]&&gb.error(a[0]),a},PSEUDO:function(a){var b,c=!a[6]&&a[2];return X.CHILD.test(a[0])?null:(a[3]?a[2]=a[4]||a[5]||"":c&&V.test(c)&&(b=g(c,!0))&&(b=c.indexOf(")",c.length-b)-c.length)&&(a[0]=a[0].slice(0,b),a[2]=c.slice(0,b)),a.slice(0,3))}},filter:{TAG:function(a){var b=a.replace(cb,db).toLowerCase();return"*"===a?function(){return!0}:function(a){return a.nodeName&&a.nodeName.toLowerCase()===b}},CLASS:function(a){var b=y[a+" "];return b||(b=new RegExp("(^|"+L+")"+a+"("+L+"|`$)"))&&y(a,function(a){return b.test("string"==typeof a.className&&a.className||"undefined"!=typeof a.getAttribute&&a.getAttribute("class")||"")})},ATTR:function(a,b,c){return function(d){var e=gb.attr(d,a);return null==e?"!="===b:b?(e+="","="===b?e===c:"!="===b?e!==c:"^="===b?c&&0===e.indexOf(c):"*="===b?c&&e.indexOf(c)>-1:"`$="===b?c&&e.slice(-c.length)===c:"~="===b?(" "+e.replace(Q," ")+" ").indexOf(c)>-1:"|="===b?e===c||e.slice(0,c.length+1)===c+"-":!1):!0}},CHILD:function(a,b,c,d,e){var f="nth"!==a.slice(0,3),g="last"!==a.slice(-4),h="of-type"===b;return 1===d&&0===e?function(a){return!!a.parentNode}:function(b,c,i){var j,k,l,m,n,o,p=f!==g?"nextSibling":"previousSibling",q=b.parentNode,r=h&&b.nodeName.toLowerCase(),s=!i&&!h;if(q){if(f){while(p){l=b;while(l=l[p])if(h?l.nodeName.toLowerCase()===r:1===l.nodeType)return!1;o=p="only"===a&&!o&&"nextSibling"}return!0}if(o=[g?q.firstChild:q.lastChild],g&&s){k=q[u]||(q[u]={}),j=k[a]||[],n=j[0]===w&&j[1],m=j[0]===w&&j[2],l=n&&q.childNodes[n];while(l=++n&&l&&l[p]||(m=n=0)||o.pop())if(1===l.nodeType&&++m&&l===b){k[a]=[w,n,m];break}}else if(s&&(j=(b[u]||(b[u]={}))[a])&&j[0]===w)m=j[1];else while(l=++n&&l&&l[p]||(m=n=0)||o.pop())if((h?l.nodeName.toLowerCase()===r:1===l.nodeType)&&++m&&(s&&((l[u]||(l[u]={}))[a]=[w,m]),l===b))break;return m-=e,m===d||m%d===0&&m/d>=0}}},PSEUDO:function(a,b){var c,e=d.pseudos[a]||d.setFilters[a.toLowerCase()]||gb.error("unsupported pseudo: "+a);return e[u]?e(b):e.length>1?(c=[a,a,"",b],d.setFilters.hasOwnProperty(a.toLowerCase())?ib(function(a,c){var d,f=e(a,b),g=f.length;while(g--)d=J(a,f[g]),a[d]=!(c[d]=f[g])}):function(a){return e(a,0,c)}):e}},pseudos:{not:ib(function(a){var b=[],c=[],d=h(a.replace(R,"`$1"));return d[u]?ib(function(a,b,c,e){var f,g=d(a,null,e,[]),h=a.length;while(h--)(f=g[h])&&(a[h]=!(b[h]=f))}):function(a,e,f){return b[0]=a,d(b,null,f,c),b[0]=null,!c.pop()}}),has:ib(function(a){return function(b){return gb(a,b).length>0}}),contains:ib(function(a){return a=a.replace(cb,db),function(b){return(b.textContent||b.innerText||e(b)).indexOf(a)>-1}}),lang:ib(function(a){return W.test(a||"")||gb.error("unsupported lang: "+a),a=a.replace(cb,db).toLowerCase(),function(b){var c;do if(c=p?b.lang:b.getAttribute("xml:lang")||b.getAttribute("lang"))return c=c.toLowerCase(),c===a||0===c.indexOf(a+"-");while((b=b.parentNode)&&1===b.nodeType);return!1}}),target:function(b){var c=a.location&&a.location.hash;return c&&c.slice(1)===b.id},root:function(a){return a===o},focus:function(a){return a===n.activeElement&&(!n.hasFocus||n.hasFocus())&&!!(a.type||a.href||~a.tabIndex)},enabled:function(a){return a.disabled===!1},disabled:function(a){return a.disabled===!0},checked:function(a){var b=a.nodeName.toLowerCase();return"input"===b&&!!a.checked||"option"===b&&!!a.selected},selected:function(a){return a.parentNode&&a.parentNode.selectedIndex,a.selected===!0},empty:function(a){for(a=a.firstChild;a;a=a.nextSibling)if(a.nodeType<6)return!1;return!0},parent:function(a){return!d.pseudos.empty(a)},header:function(a){return Z.test(a.nodeName)},input:function(a){return Y.test(a.nodeName)},button:function(a){var b=a.nodeName.toLowerCase();return"input"===b&&"button"===a.type||"button"===b},text:function(a){var b;return"input"===a.nodeName.toLowerCase()&&"text"===a.type&&(null==(b=a.getAttribute("type"))||"text"===b.toLowerCase())},first:ob(function(){return[0]}),last:ob(function(a,b){return[b-1]}),eq:ob(function(a,b,c){return[0>c?c+b:c]}),even:ob(function(a,b){for(var c=0;b>c;c+=2)a.push(c);return a}),odd:ob(function(a,b){for(var c=1;b>c;c+=2)a.push(c);return a}),lt:ob(function(a,b,c){for(var d=0>c?c+b:c;--d>=0;)a.push(d);return a}),gt:ob(function(a,b,c){for(var d=0>c?c+b:c;++d<b;)a.push(d);return a})}},d.pseudos.nth=d.pseudos.eq;for(b in{radio:!0,checkbox:!0,file:!0,password:!0,image:!0})d.pseudos[b]=mb(b);for(b in{submit:!0,reset:!0})d.pseudos[b]=nb(b);function qb(){}qb.prototype=d.filters=d.pseudos,d.setFilters=new qb,g=gb.tokenize=function(a,b){var c,e,f,g,h,i,j,k=z[a+" "];if(k)return b?0:k.slice(0);h=a,i=[],j=d.preFilter;while(h){(!c||(e=S.exec(h)))&&(e&&(h=h.slice(e[0].length)||h),i.push(f=[])),c=!1,(e=T.exec(h))&&(c=e.shift(),f.push({value:c,type:e[0].replace(R," ")}),h=h.slice(c.length));for(g in d.filter)!(e=X[g].exec(h))||j[g]&&!(e=j[g](e))||(c=e.shift(),f.push({value:c,type:g,matches:e}),h=h.slice(c.length));if(!c)break}return b?h.length:h?gb.error(a):z(a,i).slice(0)};function rb(a){for(var b=0,c=a.length,d="";c>b;b++)d+=a[b].value;return d}function sb(a,b,c){var d=b.dir,e=c&&"parentNode"===d,f=x++;return b.first?function(b,c,f){while(b=b[d])if(1===b.nodeType||e)return a(b,c,f)}:function(b,c,g){var h,i,j=[w,f];if(g){while(b=b[d])if((1===b.nodeType||e)&&a(b,c,g))return!0}else while(b=b[d])if(1===b.nodeType||e){if(i=b[u]||(b[u]={}),(h=i[d])&&h[0]===w&&h[1]===f)return j[2]=h[2];if(i[d]=j,j[2]=a(b,c,g))return!0}}}function tb(a){return a.length>1?function(b,c,d){var e=a.length;while(e--)if(!a[e](b,c,d))return!1;return!0}:a[0]}function ub(a,b,c){for(var d=0,e=b.length;e>d;d++)gb(a,b[d],c);return c}function vb(a,b,c,d,e){for(var f,g=[],h=0,i=a.length,j=null!=b;i>h;h++)(f=a[h])&&(!c||c(f,d,e))&&(g.push(f),j&&b.push(h));return g}function wb(a,b,c,d,e,f){return d&&!d[u]&&(d=wb(d)),e&&!e[u]&&(e=wb(e,f)),ib(function(f,g,h,i){var j,k,l,m=[],n=[],o=g.length,p=f||ub(b||"*",h.nodeType?[h]:h,[]),q=!a||!f&&b?p:vb(p,m,a,h,i),r=c?e||(f?a:o||d)?[]:g:q;if(c&&c(q,r,h,i),d){j=vb(r,n),d(j,[],h,i),k=j.length;while(k--)(l=j[k])&&(r[n[k]]=!(q[n[k]]=l))}if(f){if(e||a){if(e){j=[],k=r.length;while(k--)(l=r[k])&&j.push(q[k]=l);e(null,r=[],j,i)}k=r.length;while(k--)(l=r[k])&&(j=e?J(f,l):m[k])>-1&&(f[j]=!(g[j]=l))}}else r=vb(r===g?r.splice(o,r.length):r),e?e(null,g,r,i):H.apply(g,r)})}function xb(a){for(var b,c,e,f=a.length,g=d.relative[a[0].type],h=g||d.relative[" "],i=g?1:0,k=sb(function(a){return a===b},h,!0),l=sb(function(a){return J(b,a)>-1},h,!0),m=[function(a,c,d){var e=!g&&(d||c!==j)||((b=c).nodeType?k(a,c,d):l(a,c,d));return b=null,e}];f>i;i++)if(c=d.relative[a[i].type])m=[sb(tb(m),c)];else{if(c=d.filter[a[i].type].apply(null,a[i].matches),c[u]){for(e=++i;f>e;e++)if(d.relative[a[e].type])break;return wb(i>1&&tb(m),i>1&&rb(a.slice(0,i-1).concat({value:" "===a[i-2].type?"*":""})).replace(R,"`$1"),c,e>i&&xb(a.slice(i,e)),f>e&&xb(a=a.slice(e)),f>e&&rb(a))}m.push(c)}return tb(m)}function yb(a,b){var c=b.length>0,e=a.length>0,f=function(f,g,h,i,k){var l,m,o,p=0,q="0",r=f&&[],s=[],t=j,u=f||e&&d.find.TAG("*",k),v=w+=null==t?1:Math.random()||.1,x=u.length;for(k&&(j=g!==n&&g);q!==x&&null!=(l=u[q]);q++){if(e&&l){m=0;while(o=a[m++])if(o(l,g,h)){i.push(l);break}k&&(w=v)}c&&((l=!o&&l)&&p--,f&&r.push(l))}if(p+=q,c&&q!==p){m=0;while(o=b[m++])o(r,s,g,h);if(f){if(p>0)while(q--)r[q]||s[q]||(s[q]=F.call(i));s=vb(s)}H.apply(i,s),k&&!f&&s.length>0&&p+b.length>1&&gb.uniqueSort(i)}return k&&(w=v,j=t),r};return c?ib(f):f}return h=gb.compile=function(a,b){var c,d=[],e=[],f=A[a+" "];if(!f){b||(b=g(a)),c=b.length;while(c--)f=xb(b[c]),f[u]?d.push(f):e.push(f);f=A(a,yb(e,d)),f.selector=a}return f},i=gb.select=function(a,b,e,f){var i,j,k,l,m,n="function"==typeof a&&a,o=!f&&g(a=n.selector||a);if(e=e||[],1===o.length){if(j=o[0]=o[0].slice(0),j.length>2&&"ID"===(k=j[0]).type&&c.getById&&9===b.nodeType&&p&&d.relative[j[1].type]){if(b=(d.find.ID(k.matches[0].replace(cb,db),b)||[])[0],!b)return e;n&&(b=b.parentNode),a=a.slice(j.shift().value.length)}i=X.needsContext.test(a)?0:j.length;while(i--){if(k=j[i],d.relative[l=k.type])break;if((m=d.find[l])&&(f=m(k.matches[0].replace(cb,db),ab.test(j[0].type)&&pb(b.parentNode)||b))){if(j.splice(i,1),a=f.length&&rb(j),!a)return H.apply(e,f),e;break}}}return(n||h(a,o))(f,b,!p,e,ab.test(a)&&pb(b.parentNode)||b),e},c.sortStable=u.split("").sort(B).join("")===u,c.detectDuplicates=!!l,m(),c.sortDetached=jb(function(a){return 1&a.compareDocumentPosition(n.createElement("div"))}),jb(function(a){return a.innerHTML="<a href='#'></a>","#"===a.firstChild.getAttribute("href")})||kb("type|href|height|width",function(a,b,c){return c?void 0:a.getAttribute(b,"type"===b.toLowerCase()?1:2)}),c.attributes&&jb(function(a){return a.innerHTML="<input/>",a.firstChild.setAttribute("value",""),""===a.firstChild.getAttribute("value")})||kb("value",function(a,b,c){return c||"input"!==a.nodeName.toLowerCase()?void 0:a.defaultValue}),jb(function(a){return null==a.getAttribute("disabled")})||kb(K,function(a,b,c){var d;return c?void 0:a[b]===!0?b.toLowerCase():(d=a.getAttributeNode(b))&&d.specified?d.value:null}),gb}(a);n.find=t,n.expr=t.selectors,n.expr[":"]=n.expr.pseudos,n.unique=t.uniqueSort,n.text=t.getText,n.isXMLDoc=t.isXML,n.contains=t.contains;var u=n.expr.match.needsContext,v=/^<(\w+)\s*\/?>(?:<\/\1>|)`$/,w=/^.[^:#\[\.,]*`$/;function x(a,b,c){if(n.isFunction(b))return n.grep(a,function(a,d){return!!b.call(a,d,a)!==c});if(b.nodeType)return n.grep(a,function(a){return a===b!==c});if("string"==typeof b){if(w.test(b))return n.filter(b,a,c);b=n.filter(b,a)}return n.grep(a,function(a){return g.call(b,a)>=0!==c})}n.filter=function(a,b,c){var d=b[0];return c&&(a=":not("+a+")"),1===b.length&&1===d.nodeType?n.find.matchesSelector(d,a)?[d]:[]:n.find.matches(a,n.grep(b,function(a){return 1===a.nodeType}))},n.fn.extend({find:function(a){var b,c=this.length,d=[],e=this;if("string"!=typeof a)return this.pushStack(n(a).filter(function(){for(b=0;c>b;b++)if(n.contains(e[b],this))return!0}));for(b=0;c>b;b++)n.find(a,e[b],d);return d=this.pushStack(c>1?n.unique(d):d),d.selector=this.selector?this.selector+" "+a:a,d},filter:function(a){return this.pushStack(x(this,a||[],!1))},not:function(a){return this.pushStack(x(this,a||[],!0))},is:function(a){return!!x(this,"string"==typeof a&&u.test(a)?n(a):a||[],!1).length}});var y,z=/^(?:\s*(<[\w\W]+>)[^>]*|#([\w-]*))`$/,A=n.fn.init=function(a,b){var c,d;if(!a)return this;if("string"==typeof a){if(c="<"===a[0]&&">"===a[a.length-1]&&a.length>=3?[null,a,null]:z.exec(a),!c||!c[1]&&b)return!b||b.jquery?(b||y).find(a):this.constructor(b).find(a);if(c[1]){if(b=b instanceof n?b[0]:b,n.merge(this,n.parseHTML(c[1],b&&b.nodeType?b.ownerDocument||b:l,!0)),v.test(c[1])&&n.isPlainObject(b))for(c in b)n.isFunction(this[c])?this[c](b[c]):this.attr(c,b[c]);return this}return d=l.getElementById(c[2]),d&&d.parentNode&&(this.length=1,this[0]=d),this.context=l,this.selector=a,this}return a.nodeType?(this.context=this[0]=a,this.length=1,this):n.isFunction(a)?"undefined"!=typeof y.ready?y.ready(a):a(n):(void 0!==a.selector&&(this.selector=a.selector,this.context=a.context),n.makeArray(a,this))};A.prototype=n.fn,y=n(l);var B=/^(?:parents|prev(?:Until|All))/,C={children:!0,contents:!0,next:!0,prev:!0};n.extend({dir:function(a,b,c){var d=[],e=void 0!==c;while((a=a[b])&&9!==a.nodeType)if(1===a.nodeType){if(e&&n(a).is(c))break;d.push(a)}return d},sibling:function(a,b){for(var c=[];a;a=a.nextSibling)1===a.nodeType&&a!==b&&c.push(a);return c}}),n.fn.extend({has:function(a){var b=n(a,this),c=b.length;return this.filter(function(){for(var a=0;c>a;a++)if(n.contains(this,b[a]))return!0})},closest:function(a,b){for(var c,d=0,e=this.length,f=[],g=u.test(a)||"string"!=typeof a?n(a,b||this.context):0;e>d;d++)for(c=this[d];c&&c!==b;c=c.parentNode)if(c.nodeType<11&&(g?g.index(c)>-1:1===c.nodeType&&n.find.matchesSelector(c,a))){f.push(c);break}return this.pushStack(f.length>1?n.unique(f):f)},index:function(a){return a?"string"==typeof a?g.call(n(a),this[0]):g.call(this,a.jquery?a[0]:a):this[0]&&this[0].parentNode?this.first().prevAll().length:-1},add:function(a,b){return this.pushStack(n.unique(n.merge(this.get(),n(a,b))))},addBack:function(a){return this.add(null==a?this.prevObject:this.prevObject.filter(a))}});function D(a,b){while((a=a[b])&&1!==a.nodeType);return a}n.each({parent:function(a){var b=a.parentNode;return b&&11!==b.nodeType?b:null},parents:function(a){return n.dir(a,"parentNode")},parentsUntil:function(a,b,c){return n.dir(a,"parentNode",c)},next:function(a){return D(a,"nextSibling")},prev:function(a){return D(a,"previousSibling")},nextAll:function(a){return n.dir(a,"nextSibling")},prevAll:function(a){return n.dir(a,"previousSibling")},nextUntil:function(a,b,c){return n.dir(a,"nextSibling",c)},prevUntil:function(a,b,c){return n.dir(a,"previousSibling",c)},siblings:function(a){return n.sibling((a.parentNode||{}).firstChild,a)},children:function(a){return n.sibling(a.firstChild)},contents:function(a){return a.contentDocument||n.merge([],a.childNodes)}},function(a,b){n.fn[a]=function(c,d){var e=n.map(this,b,c);return"Until"!==a.slice(-5)&&(d=c),d&&"string"==typeof d&&(e=n.filter(d,e)),this.length>1&&(C[a]||n.unique(e),B.test(a)&&e.reverse()),this.pushStack(e)}});var E=/\S+/g,F={};function G(a){var b=F[a]={};return n.each(a.match(E)||[],function(a,c){b[c]=!0}),b}n.Callbacks=function(a){a="string"==typeof a?F[a]||G(a):n.extend({},a);var b,c,d,e,f,g,h=[],i=!a.once&&[],j=function(l){for(b=a.memory&&l,c=!0,g=e||0,e=0,f=h.length,d=!0;h&&f>g;g++)if(h[g].apply(l[0],l[1])===!1&&a.stopOnFalse){b=!1;break}d=!1,h&&(i?i.length&&j(i.shift()):b?h=[]:k.disable())},k={add:function(){if(h){var c=h.length;!function g(b){n.each(b,function(b,c){var d=n.type(c);"function"===d?a.unique&&k.has(c)||h.push(c):c&&c.length&&"string"!==d&&g(c)})}(arguments),d?f=h.length:b&&(e=c,j(b))}return this},remove:function(){return h&&n.each(arguments,function(a,b){var c;while((c=n.inArray(b,h,c))>-1)h.splice(c,1),d&&(f>=c&&f--,g>=c&&g--)}),this},has:function(a){return a?n.inArray(a,h)>-1:!(!h||!h.length)},empty:function(){return h=[],f=0,this},disable:function(){return h=i=b=void 0,this},disabled:function(){return!h},lock:function(){return i=void 0,b||k.disable(),this},locked:function(){return!i},fireWith:function(a,b){return!h||c&&!i||(b=b||[],b=[a,b.slice?b.slice():b],d?i.push(b):j(b)),this},fire:function(){return k.fireWith(this,arguments),this},fired:function(){return!!c}};return k},n.extend({Deferred:function(a){var b=[["resolve","done",n.Callbacks("once memory"),"resolved"],["reject","fail",n.Callbacks("once memory"),"rejected"],["notify","progress",n.Callbacks("memory")]],c="pending",d={state:function(){return c},always:function(){return e.done(arguments).fail(arguments),this},then:function(){var a=arguments;return n.Deferred(function(c){n.each(b,function(b,f){var g=n.isFunction(a[b])&&a[b];e[f[1]](function(){var a=g&&g.apply(this,arguments);a&&n.isFunction(a.promise)?a.promise().done(c.resolve).fail(c.reject).progress(c.notify):c[f[0]+"With"](this===d?c.promise():this,g?[a]:arguments)})}),a=null}).promise()},promise:function(a){return null!=a?n.extend(a,d):d}},e={};return d.pipe=d.then,n.each(b,function(a,f){var g=f[2],h=f[3];d[f[1]]=g.add,h&&g.add(function(){c=h},b[1^a][2].disable,b[2][2].lock),e[f[0]]=function(){return e[f[0]+"With"](this===e?d:this,arguments),this},e[f[0]+"With"]=g.fireWith}),d.promise(e),a&&a.call(e,e),e},when:function(a){var b=0,c=d.call(arguments),e=c.length,f=1!==e||a&&n.isFunction(a.promise)?e:0,g=1===f?a:n.Deferred(),h=function(a,b,c){return function(e){b[a]=this,c[a]=arguments.length>1?d.call(arguments):e,c===i?g.notifyWith(b,c):--f||g.resolveWith(b,c)}},i,j,k;if(e>1)for(i=new Array(e),j=new Array(e),k=new Array(e);e>b;b++)c[b]&&n.isFunction(c[b].promise)?c[b].promise().done(h(b,k,c)).fail(g.reject).progress(h(b,j,i)):--f;return f||g.resolveWith(k,c),g.promise()}});var H;n.fn.ready=function(a){return n.ready.promise().done(a),this},n.extend({isReady:!1,readyWait:1,holdReady:function(a){a?n.readyWait++:n.ready(!0)},ready:function(a){(a===!0?--n.readyWait:n.isReady)||(n.isReady=!0,a!==!0&&--n.readyWait>0||(H.resolveWith(l,[n]),n.fn.triggerHandler&&(n(l).triggerHandler("ready"),n(l).off("ready"))))}});function I(){l.removeEventListener("DOMContentLoaded",I,!1),a.removeEventListener("load",I,!1),n.ready()}n.ready.promise=function(b){return H||(H=n.Deferred(),"complete"===l.readyState?setTimeout(n.ready):(l.addEventListener("DOMContentLoaded",I,!1),a.addEventListener("load",I,!1))),H.promise(b)},n.ready.promise();var J=n.access=function(a,b,c,d,e,f,g){var h=0,i=a.length,j=null==c;if("object"===n.type(c)){e=!0;for(h in c)n.access(a,b,h,c[h],!0,f,g)}else if(void 0!==d&&(e=!0,n.isFunction(d)||(g=!0),j&&(g?(b.call(a,d),b=null):(j=b,b=function(a,b,c){return j.call(n(a),c)})),b))for(;i>h;h++)b(a[h],c,g?d:d.call(a[h],h,b(a[h],c)));return e?a:j?b.call(a):i?b(a[0],c):f};n.acceptData=function(a){return 1===a.nodeType||9===a.nodeType||!+a.nodeType};function K(){Object.defineProperty(this.cache={},0,{get:function(){return{}}}),this.expando=n.expando+K.uid++}K.uid=1,K.accepts=n.acceptData,K.prototype={key:function(a){if(!K.accepts(a))return 0;var b={},c=a[this.expando];if(!c){c=K.uid++;try{b[this.expando]={value:c},Object.defineProperties(a,b)}catch(d){b[this.expando]=c,n.extend(a,b)}}return this.cache[c]||(this.cache[c]={}),c},set:function(a,b,c){var d,e=this.key(a),f=this.cache[e];if("string"==typeof b)f[b]=c;else if(n.isEmptyObject(f))n.extend(this.cache[e],b);else for(d in b)f[d]=b[d];return f},get:function(a,b){var c=this.cache[this.key(a)];return void 0===b?c:c[b]},access:function(a,b,c){var d;return void 0===b||b&&"string"==typeof b&&void 0===c?(d=this.get(a,b),void 0!==d?d:this.get(a,n.camelCase(b))):(this.set(a,b,c),void 0!==c?c:b)},remove:function(a,b){var c,d,e,f=this.key(a),g=this.cache[f];if(void 0===b)this.cache[f]={};else{n.isArray(b)?d=b.concat(b.map(n.camelCase)):(e=n.camelCase(b),b in g?d=[b,e]:(d=e,d=d in g?[d]:d.match(E)||[])),c=d.length;while(c--)delete g[d[c]]}},hasData:function(a){return!n.isEmptyObject(this.cache[a[this.expando]]||{})},discard:function(a){a[this.expando]&&delete this.cache[a[this.expando]]}};var L=new K,M=new K,N=/^(?:\{[\w\W]*\}|\[[\w\W]*\])`$/,O=/([A-Z])/g;function P(a,b,c){var d;if(void 0===c&&1===a.nodeType)if(d="data-"+b.replace(O,"-`$1").toLowerCase(),c=a.getAttribute(d),"string"==typeof c){try{c="true"===c?!0:"false"===c?!1:"null"===c?null:+c+""===c?+c:N.test(c)?n.parseJSON(c):c}catch(e){}M.set(a,b,c)}else c=void 0;return c}n.extend({hasData:function(a){return M.hasData(a)||L.hasData(a)},data:function(a,b,c){return M.access(a,b,c)
@@ -1441,7 +1399,7 @@ $htmlJS = @"
 </script>
 "@
 
-$htmlCSS = @"
+    $htmlCSS = @"
 <style>
 body {
   background-color: #cccccc;
@@ -1935,7 +1893,7 @@ img.mfp-img {
 </head>
 "@
 
-$htmlBody = @"
+    $htmlBody = @"
 <body>
 <div style="margin:auto;width:90%">
 
@@ -2707,7 +2665,7 @@ $PSProfile
 </div>
 "@
 
-$htmlFooter = @"
+    $htmlFooter = @"
 <br />
 <center>
 </div>
@@ -2716,29 +2674,30 @@ $htmlFooter = @"
 </html>
 "@
 
-$htmlHead > $html
-$htmlJS >> $html
-$htmlCSS >> $html
-$htmlBody >> $html
-$htmlFooter >> $html
+    $htmlHead > $html
+    $htmlJS >> $html
+    $htmlCSS >> $html
+    $htmlBody >> $html
+    $htmlFooter >> $html
 
-$output = $("TR3PS_" + $dateString + "_" + $computerName)
-Rename-Item TR3PS $output
+    $output = $("TR3PS_" + $dateString + "_" + $computerName)
+    Rename-Item TR3PS $output
 
-# Send email notification with attached HTML Report upon completion when -sendEmail parameter is set
-if(-Not ($sendEmail)) {
-} else {
-if ($sendEmail -eq $true) {
-    function sendEmail {
-        $att = $html.Substring(8)
-        $file = "$TR3PSDir\$output\$att"
-        $msg = New-Object System.Net.Mail.MailMessage
-        $smtp = New-Object System.Net.Mail.SMTPClient($smtpServer)
-        $attachment = New-Object Net.Mail.Attachment($file)
-        $msg.From = $emailFrom
-        $msg.To.Add($emailTo)
-        $msg.Subject = "TR3PS Live Data Acquisition - " + $computerName + "_" + $dateString
-        $msg.Body = @"
+    # Send email notification with attached HTML Report upon completion when -sendEmail parameter is set
+    if (-Not ($sendEmail)) {
+    }
+    else {
+        if ($sendEmail -eq $true) {
+            function sendEmail {
+                $att = $html.Substring(8)
+                $file = "$TR3PSDir\$output\$att"
+                $msg = New-Object System.Net.Mail.MailMessage
+                $smtp = New-Object System.Net.Mail.SMTPClient($smtpServer)
+                $attachment = New-Object Net.Mail.Attachment($file)
+                $msg.From = $emailFrom
+                $msg.To.Add($emailTo)
+                $msg.Subject = "TR3PS Live Data Acquisition - " + $computerName + "_" + $dateString
+                $msg.Body = @"
 <html><head></head><body>
 <center><h2 style="font:Calibri,sans-serif;color:#0c234c;">Live Data Capture => <strong>$computerName</strong></h2></center>
 <p style="font:Calibri,sans-serif;">Please see the attached HTML report for an overview of the system configuration.</p><br />
@@ -2754,63 +2713,267 @@ $date
 </td></tr></table>
 </body></html>
 "@
-        $msg.IsBodyHTML = $true
-        $msg.Attachments.Add($attachment)
-        $smtp.Send($msg)
-    }
-} else {
-    Write-Host "Missing Required Parameters for [sendEmail]"
-    Write-Host "     This option was specified "
-    Write-Host "PS C:\> .\TR3PS.ps1 -sendEmail -smtpServer ['SMTP SERVER IP'] -emailTo ['user@mail.com'] -emailFrom ['TR3PS[at]mail.com']"
-    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
-    Exit 1
-    }
-    Write-Host "Sending email : from - $emailFrom : to - $emailTo : SMTP server - $smtpServer"
-    sendEmail
-    if (-Not ($share)) {
-        while (Test-Path TR3PS_*) {
-            rm TR3PS_* -Recurse -Force
+                $msg.IsBodyHTML = $true
+                $msg.Attachments.Add($attachment)
+                $smtp.Send($msg)
+            }
         }
-    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1010 -Message "Email sent : from - $emailFrom : to - $emailTo : SMTP server - $smtpServer"
-    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1011 -Message "TR3PS evidence files removed from target host"
-    }
-}
-
-
-#=======================================================================================
-# Migration and Host Cleanup
-#=======================================================================================
-
-# Copy evidence to the share
-if(-Not ($share)) {
-} else {
-if ($share -eq $true) {
-    if ($remote -eq $false) {
-        Write-Host "Pushing data to share : $netShare"
-        Copy-Item TR3PS_* -Recurse $netShare
-
-        # Cleanup
-        $evidence = $($netShare + "\TR3PS_" + $dateString + "_" + $computerName)
-        If (Test-Path $evidence){
-            Remove-Item TR3PS_* -Recurse -Force
-            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1012 -Message "Evidence Pushed to Share : $netShare"
-        }else{
-            Write-Error "EVIDENCE MIGRATION UNSUCCESSFUL!"
-            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Evidence Migration Failure! Manual Cleanup Required!"
+        else {
+            Write-Host "Missing Required Parameters for [sendEmail]"
+            Write-Host "     This option was specified "
+            Write-Host "PS C:\> .\TR3PS.ps1 -sendEmail -smtpServer ['SMTP SERVER IP'] -emailTo ['user@mail.com'] -emailFrom ['TR3PS[at]mail.com']"
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
             Exit 1
         }
-    } else {
-        Write-Host "Missing Required Parameter [share]"
-        Write-Host "     This option was specified "
-        Write-Host "PS C:\> .\TR3PS.ps1 -share -netShare ['\\share\location']"
-        Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
-        Exit 1
+        Write-Host "Sending email : from - $emailFrom : to - $emailTo : SMTP server - $smtpServer"
+        sendEmail
+        if (-Not ($share)) {
+            while (Test-Path TR3PS_*) {
+                rm TR3PS_* -Recurse -Force
+            }
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1010 -Message "Email sent : from - $emailFrom : to - $emailTo : SMTP server - $smtpServer"
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1011 -Message "TR3PS evidence files removed from target host"
+        }
     }
-}}
 
 
+    #=======================================================================================
+    # Migration and Host Cleanup
+    #=======================================================================================
 
+    # Copy evidence to the share
+    if (-Not ($share)) {
+    }
+    else {
+        if ($share -eq $true) {
+            if ($remote -eq $false) {
+                Write-Host "Pushing data to share : $netShare"
+                Copy-Item TR3PS_* -Recurse $netShare
+
+                # Cleanup
+                $evidence = $($netShare + "\TR3PS_" + $dateString + "_" + $computerName)
+                If (Test-Path $evidence) {
+                    Remove-Item TR3PS_* -Recurse -Force
+                    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1012 -Message "Evidence Pushed to Share : $netShare"
+                }
+                else {
+                    Write-Error "EVIDENCE MIGRATION UNSUCCESSFUL!"
+                    Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Evidence Migration Failure! Manual Cleanup Required!"
+                    Exit 1
+                }
+            }
+            else {
+                Write-Host "Missing Required Parameter [share]"
+                Write-Host "     This option was specified "
+                Write-Host "PS C:\> .\TR3PS.ps1 -share -netShare ['\\share\location']"
+                Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
+                Exit 1
+            }
+        }
+    }
+
+
+    #=======================================================================================
+    # Workstation Quarantine
+    #=======================================================================================
+
+    if (-Not ($lockdown)) {
+    }
+    else {
+        if ($lockdown -eq $true) {
+
+            Write-Host "Locking down endpoint: $computerName - $ip"
+
+            # Lockdown
+            Function Invoke-Lockdown {
+
+                # Disable Network Interfaces
+                $wirelessNic = Get-WmiObject -Class Win32_NetworkAdapter -filter "Name LIKE '%Wireless%'"
+                $wirelessNic.disable()
+                $localNic = Get-WmiObject -Class Win32_NetworkAdapter -filter "Name LIKE '%Intel%'"
+                $localNic.disable()
+                Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1101 -Message "Lockdown : Network Interface Cards Disabled"
+
+                $WmiHash = @{}
+                if ($Private:Credential) {
+                    $WmiHash.Add('Credential', $credential)
+                }
+                Try {
+                    $Validate = (Get-WmiObject -Class Win32_OperatingSystem -ComputerName $C -ErrorAction Stop @WmiHash).Win32Shutdown('0x0')
+                }
+                Catch [System.Management.Automation.MethodInvocationException] {
+                    Write-Error 'No user session found to log off.'
+                    Exit 1
+                }
+                Catch {
+                    Throw
+                }
+                if ($Validate.ReturnValue -ne 0) {
+                    Write-Error "User could not be logged off, return value: $($Validate.ReturnValue)"
+                    Exit 1
+                }
+                Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1102 -Message "Lockdown : All Local Users Logged Out"
+
+                # Lock Workstation
+                rundll32.exe user32.dll, LockWorkStation > $null 2>&1
+                Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 1103 -Message "Lockdown : System Locked"
+            }
+
+        }
+        else {
+            Write-Host "Missing Required Parameter [lockdown]"
+            Write-Host "     This option was specified "
+            Write-Host "PS C:\> .\TR3PS.ps1 -lockdown"
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Required Parameter"
+            Exit 1
+        }
+    }
+
+    # Lock out the user's AD account
+    if (-Not ($adLock)) {
+    }
+    else {
+        if ($adLock -eq $true) {
+            function get-dn () {
+                $root = New-Object System.DirectoryServices.DirectoryEntry
+                $searcher = new-object System.DirectoryServices.DirectorySearcher($root)
+                $searcher.filter = "(&(objectClass=user)(sAMAccountName= $accountNameAD))"
+                $user = $searcher.findall()
+                if ($user.count -gt 1) {
+                    $count = 0
+                    foreach ($i in $user) {
+                        write-host $count ": " $i.path
+                        $count = $count + 1
+                    }
+                    $selection = Read-Host "Please select item: "
+                    return $user[$selection].path
+                }
+                else {
+                    return $user[0].path
+                }
+            }
+            $path = get-dn $accountNameAD
+            if ($path -ne $null) {
+                $account = [ADSI]$path
+                $account.psbase.invokeset("AccountDisabled", "True")
+                $account.setinfo()
+                Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 2101 -Message "AD Lockout : User $account Disabled within Active Directory"
+            }
+            else {
+                write-host "No user account found!"
+                Write-Host "Please specify a user account with the following command line switch:"
+                Write-Host "PS C:\> .\TR3PS.ps1 -adLock [username]"
+                Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Username Not Found"
+                Exit 1
+            }
+        }
+    }
+}
+if (-Not ($remote)) {
+    Invoke-Recon
+}
+Else {
+    if ($remote -eq $true) {
+        $hostnameCheck = "^(?=.{1,255}$)[0-9A-Za-z](?:(?:[0-9A-Za-z]|-){0,61}[0-9A-Za-z])?(?:\.[0-9A-Za-z](?:(?:[0-9A-Za-z]|-){0,61}[0-9A-Za-z])?)*\.?$"
+        if (-not ($target -match $hostnameCheck)) {
+            Write-Host "That's not a hostname..."
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34405 -Message "Potential Attack Detected via hostname parameter : $target"
+            Exit 1
+        }
+        if ($sendEmail -eq $false) {
+            Write-Host ""
+            Write-Host "You must get the data off of the remote host."
+            Write-Host "Try using the -sendEmail parameter."
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Missing Parameter"
+            Exit 1
+        }
+        try {
+            if (-Not ($password)) {
+                $cred = Get-Credential
+            }
+            Else {
+                $securePass = ConvertTo-SecureString -string $password -AsPlainText -Force
+                $cred = New-Object -typename System.Management.Automation.PSCredential -argumentlist $username, $securePass
+            }
+            $scriptName = $MyInvocation.MyCommand.Name
+            $content = type $scriptName
+
+            # send email
+            if ($sendEmail -eq $true) {
+
+                # extract client email data (send contents via email)
+                if ($email -eq $true) {
+                    Invoke-Command -ScriptBlock {
+                        param ($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo, $email)
+                        if (Test-Path \TR3PS.ps1) {
+                            rm \TR3PS.ps1
+                        }
+                        $content >> \TR3PS.ps1
+                        C:\TR3PS.ps1 -sendEmail -email -smtpServer $smtpServer -emailFrom $emailFrom -emailTo $emailTo
+                        rm C:\TR3PS.ps1
+                    } -ArgumentList @($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo, $email) -ComputerName $target -Credential $cred
+                }
+                Else {
+
+                    # Lockdown the endpoint (disable NIC's, log user out, lock workstation, and send results via email)
+                    if ($lockdown -eq $true) {
+                        Invoke-Command -ScriptBlock {
+                            param ($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo, $lockdown)
+                            if (Test-Path \TR3PS.ps1) {
+                                rm \TR3PS.ps1
+                            }
+                            $content >> \TR3PS.ps1
+                            C:\TR3PS.ps1 -sendEmail -smtpServer $smtpServer -emailFrom $emailFrom -emailTo $emailTo -lockdown
+                            rm C:\TR3PS.ps1
+                        } -ArgumentList @($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo, $lockdown) -ComputerName $target -Credential $cred
+                    }
+                    Else {
+
+                        # lock out an account in AD (send results via email)
+                        if ($adlock -eq $true) {
+                            Invoke-Command -ScriptBlock {
+                                param ($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo, $adlock, $user, $accountNameAD, $account)
+                                if (Test-Path \TR3PS.ps1) {
+                                    rm \TR3PS.ps1
+                                }
+                                $content >> \TR3PS.ps1
+                                C:\TR3PS.ps1 -sendEmail -smtpServer $smtpServer -emailFrom $emailFrom -emailTo $emailTo -adlock $account
+                                rm C:\TR3PS.ps1
+                            } -ArgumentList @($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo, $adlock, $user, $accountNameAD, $account) -ComputerName $target -Credential $cred
+                        }
+                        Else {
+
+                            # default execution (send results via email)
+                            Invoke-Command -ScriptBlock {
+                                param ($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo)
+                                if (Test-Path \TR3PS.ps1) {
+                                    rm \TR3PS.ps1
+                                }
+                                $content >> \TR3PS.ps1
+                                C:\TR3PS.ps1 -sendEmail -smtpServer $smtpServer -emailFrom $emailFrom -emailTo $emailTo
+                                rm \TR3PS.ps1
+                            } -ArgumentList @($content, $scriptName, $sendEmail, $smtpServer, $emailFrom, $emailTo) -ComputerName $target -Credential $cred
+                        }
+                    }
+                }
+            }
+
+            # push data to share (due to security concerns)
+            if ($share -eq $true) {
+                $banner
+                Write-Host "currently pushing to a share from a remote host is not supported."
+                Write-Host "Please use -sendEmail for now unless executing locally..."
+                Exit 1
+            }
+
+        }
+        Catch {
+            Write-Host "Access Denied..."
+            Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 34404 -Message "Forensic Data Acquisition Failure : Access Denied"
+            Exit 1
+        }
+    }
 }
 Write-EventLog -LogName Application -Source "TR3PS" -EntryType Information -EventId 31337 -Message "Forensic Data Acquisition Completed Successfully"
 Exit 0
-e block
+
